@@ -27,14 +27,31 @@ client = Client(
     os.getenv("TWILIO_AUTH_TOKEN")
 )
 
+def normalize_phone(phone):
+    phone = phone.strip()
+
+    # Remove spaces/dashes
+    phone = phone.replace(" ", "").replace("-", "")
+
+    # If already has country code
+    if phone.startswith("+"):
+        return phone
+
+    # Assume India for now
+    return "+91" + phone
+
 def send_sms(phone, message):
     print("🚀 SMS FUNCTION CALLED")
+
+    phone = normalize_phone(phone)  # 🔥 FIX
     
     client.messages.create(
         body=message,
         from_=os.getenv("TWILIO_PHONE"),
         to=phone
     )
+
+
     
 # def send_sms(phone, message):
 #     client.messages.create(
