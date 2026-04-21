@@ -121,10 +121,24 @@ def normalize_date(date_str):
 
     return date_str
 
+def normalize_time(time_str):
+    time_str = time_str.strip().lower()
+
+    try:
+        # Handle AM/PM format
+        return datetime.strptime(time_str, "%I:%M %p").strftime("%H:%M")
+    except:
+        try:
+            # Already 24-hour format
+            return datetime.strptime(time_str, "%H:%M").strftime("%H:%M")
+        except:
+            return time_str
+        
 # ---------------- VALIDATIONS ---------------- #
 
 def is_future_datetime(date, time):
     date = normalize_date(date)  # 🔥 add this
+    time = normalize_time(time)
     booking_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
 
     return booking_dt > datetime.now()
@@ -145,6 +159,7 @@ def is_valid_slot(time):
 def check_availability(date, time):
 
     date = normalize_date(date)
+    time = normalize_time(time)
 
     # ❌ Block past bookings
     if not is_future_datetime(date, time):
@@ -175,7 +190,8 @@ def check_availability(date, time):
 def create_event(name, phone, date, time):
 
     date = normalize_date(date)
-    
+    time = normalize_time(time)
+
     if not check_availability(date, time):
         return False
 
