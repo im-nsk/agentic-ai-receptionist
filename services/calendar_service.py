@@ -110,11 +110,23 @@ credentials = service_account.Credentials.from_service_account_info(
 
 service = build('calendar', 'v3', credentials=credentials)
 
+def normalize_date(date_str):
+    date_str = date_str.lower().strip()
+
+    if date_str == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+
+    elif date_str == "tomorrow":
+        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    return date_str
 
 # ---------------- VALIDATIONS ---------------- #
 
 def is_future_datetime(date, time):
+    date = normalize_date(date)  # 🔥 add this
     booking_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+
     return booking_dt > datetime.now()
 
 
@@ -131,6 +143,8 @@ def is_valid_slot(time):
 # ---------------- CHECK AVAILABILITY ---------------- #
 
 def check_availability(date, time):
+
+    date = normalize_date(date)
 
     # ❌ Block past bookings
     if not is_future_datetime(date, time):
@@ -160,6 +174,8 @@ def check_availability(date, time):
 
 def create_event(name, phone, date, time):
 
+    date = normalize_date(date)
+    
     if not check_availability(date, time):
         return False
 
