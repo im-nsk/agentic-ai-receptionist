@@ -95,6 +95,7 @@ import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
+from services.sheets_service import save_to_sheet
 
 # ---------------- CONFIG ---------------- #
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -212,5 +213,5 @@ def create_event(name, phone, date, time):
     }
 
     service.events().insert(calendarId=calendar_id, body=event).execute()
-
+    save_to_sheet(name, phone, date, time)
     return True
