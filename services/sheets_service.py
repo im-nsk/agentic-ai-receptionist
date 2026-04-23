@@ -4,7 +4,10 @@ import json
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
 # ✅ SAFE ENV LOADING
 env_data = os.getenv("GOOGLE_CREDENTIALS_JSON")
