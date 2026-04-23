@@ -1,16 +1,20 @@
 import gspread
+import os
+import json
 from google.oauth2.service_account import Credentials
+from google.oauth2 import service_account
 from datetime import datetime
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-# Initialize once (global)
-creds = Credentials.from_service_account_file(
-    "credentials.json",
+credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+
+credentials = service_account.Credentials.from_service_account_info(
+    credentials_info,
     scopes=SCOPES
 )
 
-client = gspread.authorize(creds)
+client = gspread.authorize(credentials)
 
 # Open your sheet
 sheet = client.open("Clinic_Appointments").sheet1
