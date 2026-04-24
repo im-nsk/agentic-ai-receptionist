@@ -11,17 +11,23 @@ SCOPES = [
 
 
 def get_sheet():
-    credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+    try:
+        credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
 
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info,
-        scopes=SCOPES
-    )
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=SCOPES
+        )
 
-    client = gspread.authorize(credentials)
+        client = gspread.authorize(credentials)
 
-    # ✅ Use sheet ID (BEST PRACTICE)
-    return client.open_by_key("1YHojucUGtfjuGWNTd7_fjDRZfnfbaaOBT9vUyo3XLI8").sheet1
+        sheet = client.open_by_key("1YHojucUGtfjuGWNTd7_fjDRZfnfbaaOBT9vUyo3XLI8").sheet1
+
+        return sheet
+
+    except Exception as e:
+        print("❌ INIT SHEET ERROR:", repr(e))
+        raise e
 
 
 def save_to_sheet(name, phone, date, time, status="Booked"):
@@ -40,4 +46,4 @@ def save_to_sheet(name, phone, date, time, status="Booked"):
         print("✅ Saved to Google Sheet")
 
     except Exception as e:
-        print("❌ Sheet Error:", str(e))
+        print("❌ Sheet Error:", repr(e))
