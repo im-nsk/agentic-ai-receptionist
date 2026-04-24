@@ -6,3 +6,5 @@ google-auth
 twilio
 gspread
 python-dateutil
+sqlalchemy
+psycopg2-binary
