@@ -1,100 +1,11 @@
-# # booked_slots = []
-
-# # def check_availability(date, time):
-# #     slot = f"{date} {time}"
-# #     return slot not in booked_slots
-
-
-# # def create_event(name, phone, date, time):
-# #     slot = f"{date} {time}"
-
-# #     if slot in booked_slots:
-# #         return False
-
-# #     booked_slots.append(slot)
-
-# #     print(f"Booked: {name} at {slot}")
-
-# #     return True
-
-
-# from google.oauth2 import service_account
-# from googleapiclient.discovery import build
-# from datetime import datetime, timedelta
-
-# SCOPES = ['https://www.googleapis.com/auth/calendar']
-# SERVICE_ACCOUNT_FILE = 'credentials.json'
-
-# calendar_id = 'nishantnayan2002@gmail.com'  # or your calendar email
-
-# credentials = service_account.Credentials.from_service_account_file(
-#     SERVICE_ACCOUNT_FILE, scopes=SCOPES
-# )
-
-# service = build('calendar', 'v3', credentials=credentials)
-
-
-# # 🔍 CHECK AVAILABILITY
-# def check_availability(date, time):
-#     start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-#     end_time = start_time + timedelta(minutes=30)
-
-#     events = service.events().list(
-#         calendarId=calendar_id,
-#         timeMin=start_time.isoformat() + 'Z',
-#         timeMax=end_time.isoformat() + 'Z'
-#     ).execute()
-
-#     return len(events.get('items', [])) == 0
-
-
-# # 📅 CREATE EVENT
-# def create_event(name, phone, date, time):
-#     start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-#     end_time = start_time + timedelta(minutes=30)
-
-#     event = {
-#         'summary': f'Appointment with {name}',
-#         'description': f'Phone: {phone}',
-#         'start': {
-#             'dateTime': start_time.isoformat(),
-#             'timeZone': 'Asia/Kolkata',
-#         },
-#         'end': {
-#             'dateTime': end_time.isoformat(),
-#             'timeZone': 'Asia/Kolkata',
-#         },
-#     }
-
-#     service.events().insert(calendarId=calendar_id, body=event).execute()
-#     return True
-
-# from datetime import datetime
-
-# def is_future_datetime(date, time):
-#     booking_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-#     return booking_dt > datetime.now()
-
-# def is_within_working_hours(time):
-#     hour = int(time.split(":")[0])
-#     return 9 <= hour < 18  # 9 AM to 6 PM
-
-# def check_availability(date, time):
-#     # ❌ Block past bookings
-#     if not is_future_datetime(date, time):
-#         return False
-
-#     # ❌ Block outside working hours
-#     if not is_within_working_hours(time):
-#         return False
-
-
-
 import json
 import os
+from datetime import datetime, timedelta
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from datetime import datetime, timedelta
+from dateutil import parser
+
 from services.sheets_service import save_to_sheet
 
 # ---------------- CONFIG ---------------- #
@@ -111,70 +22,67 @@ credentials = service_account.Credentials.from_service_account_info(
 
 service = build('calendar', 'v3', credentials=credentials)
 
-def normalize_date(date_str):
-    date_str = date_str.lower().strip()
 
-    if date_str == "today":
-        return datetime.now().strftime("%Y-%m-%d")
+# ---------------- PARSER (CORE LOGIC) ---------------- #
 
-    elif date_str == "tomorrow":
-        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    return date_str
-
-def normalize_time(time_str):
-    time_str = time_str.strip().lower()
-
+def parse_datetime(date, time):
+    """
+    Handles ANY natural language input
+    Examples:
+    - "April 25", "11:00"
+    - "tomorrow", "9am"
+    - "next Monday", "3 PM"
+    """
     try:
-        # Handle AM/PM format
-        return datetime.strptime(time_str, "%I:%M %p").strftime("%H:%M")
-    except:
-        try:
-            # Already 24-hour format
-            return datetime.strptime(time_str, "%H:%M").strftime("%H:%M")
-        except:
-            return time_str
-        
+        dt = parser.parse(f"{date} {time}", fuzzy=True)
+
+        # Force timezone consistency (important for Google Calendar)
+        return dt
+
+    except Exception:
+        raise ValueError(f"Invalid date/time input: {date} {time}")
+
+
 # ---------------- VALIDATIONS ---------------- #
 
 def is_future_datetime(date, time):
-    date = normalize_date(date)  # 🔥 add this
-    time = normalize_time(time)
-    booking_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-
+    booking_dt = parse_datetime(date, time)
     return booking_dt > datetime.now()
 
 
-# def is_within_working_hours(time):
-#     hour = int(time.split(":")[0])
-#     return 9 <= hour < 18  # 9 AM to 6 PM
+def is_valid_slot(dt):
+    """
+    Only allow 30-min slots
+    """
+    return dt.minute in [0, 30]
 
 
-def is_valid_slot(time):
-    minutes = int(time.split(":")[1])
-    return minutes in [0, 30]  # only 00 or 30
+def is_within_working_hours(dt):
+    """
+    Example: 9 AM – 6 PM
+    """
+    return 9 <= dt.hour < 18
 
 
 # ---------------- CHECK AVAILABILITY ---------------- #
 
 def check_availability(date, time):
 
-    date = normalize_date(date)
-    time = normalize_time(time)
+    booking_dt = parse_datetime(date, time)
 
-    # ❌ Block past bookings
-    if not is_future_datetime(date, time):
+    # ❌ Past time
+    if booking_dt <= datetime.now():
         return False
-
-    # ❌ Block outside working hours
-    # if not is_within_working_hours(time):
-    #     return False
 
     # ❌ Invalid slot (like 10:17)
-    if not is_valid_slot(time):
+    if not is_valid_slot(booking_dt):
         return False
 
-    start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    # ❌ Outside working hours
+    if not is_within_working_hours(booking_dt):
+        return False
+
+    start_time = booking_dt
     end_time = start_time + timedelta(minutes=30)
 
     events = service.events().list(
@@ -190,13 +98,12 @@ def check_availability(date, time):
 
 def create_event(name, phone, date, time):
 
-    date = normalize_date(date)
-    time = normalize_time(time)
+    booking_dt = parse_datetime(date, time)
 
     if not check_availability(date, time):
         return False
 
-    start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    start_time = booking_dt
     end_time = start_time + timedelta(minutes=30)
 
     event = {
@@ -212,6 +119,12 @@ def create_event(name, phone, date, time):
         },
     }
 
-    service.events().insert(calendarId=calendar_id, body=event).execute()
-    save_to_sheet(name, phone, date, time)
+    service.events().insert(
+        calendarId=calendar_id,
+        body=event
+    ).execute()
+
+    # ✅ Save to Google Sheet
+    save_to_sheet(name, phone, start_time.strftime("%Y-%m-%d"), start_time.strftime("%H:%M"))
+
     return True
