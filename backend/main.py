@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware   # 👈 ADD THIS
-from models.booking import BookingRequest
-from services.calendar_service import check_availability, create_event, parse_datetime
-from services.client_services import get_client
-from services.sms_service import send_sms
-from db.init_db import init_db
+from backend.models.booking import BookingRequest
+from backend.models.client import Client
+from backend.services.calendar_service import check_availability, create_event, parse_datetime
+from backend.services.client_services import get_client
+from backend.services.sms_service import send_sms
+from backend.db.init_db import init_db
 
 init_db()
 

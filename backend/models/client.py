@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Integer
-from db.database import Base
+from backend.db.database import Base
 import uuid
 
 class Client(Base):

@@ -7,7 +7,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from dateutil import parser
 
-from services.sheets_service import save_to_sheet
+from backend.services.sheets_service import save_to_sheet
 
 # ---------------- GOOGLE CREDENTIALS ---------------- #
 SCOPES = ['https://www.googleapis.com/auth/calendar']

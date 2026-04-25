@@ -1,5 +1,5 @@
-from db.database import SessionLocal
-from models.client import Client
+from backend.db.database import SessionLocal
+from backend.models.client import Client
 
 def get_client(client_id):
     db = SessionLocal()
