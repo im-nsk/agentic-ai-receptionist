@@ -8,3 +8,4 @@ gspread
 python-dateutil
 sqlalchemy
 psycopg2-binary
+zoneinfo

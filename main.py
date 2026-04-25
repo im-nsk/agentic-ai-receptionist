@@ -43,8 +43,6 @@ def availability(req: BookingRequest):
 @app.post("/book-appointment")
 def book(req: BookingRequest, background_tasks: BackgroundTasks):
     try:
-        print("📥 Booking Request:", req)
-
         client = get_client(req.client_id)
 
         if not client:
@@ -56,14 +54,12 @@ def book(req: BookingRequest, background_tasks: BackgroundTasks):
             req.date,
             req.time,
             calendar_id=client.calendar_id,
-            sheet_id=client.sheet_id
+            sheet_id=client.sheet_id,
+            timezone=client.timezone   # ✅ NEW
         )
 
         if not success:
-            return {
-                "status": "failed",
-                "message": "Slot unavailable or invalid"
-            }
+            return {"status": "failed"}
 
         background_tasks.add_task(
             send_sms,
@@ -71,10 +67,7 @@ def book(req: BookingRequest, background_tasks: BackgroundTasks):
             f"Hi {req.name}, your appointment is confirmed on {req.date} at {req.time}"
         )
 
-        return {
-            "status": "confirmed",
-            "message": "Appointment booked successfully"
-        }
+        return {"status": "confirmed"}
 
     except Exception as e:
         print("❌ Booking Error:", repr(e))
