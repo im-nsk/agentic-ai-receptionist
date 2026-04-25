@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware   # 👈 ADD THIS
 from models.booking import BookingRequest
 from services.calendar_service import check_availability, create_event, parse_datetime
 from services.client_services import get_client
@@ -9,7 +10,16 @@ init_db()
 
 app = FastAPI()
 
+# 👇 ADD CORS HERE (right after app = FastAPI())
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # for now (we'll restrict later)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# -------- HEALTH CHECK --------
 @app.get("/")
 def home():
     return {"message": "AI Receptionist Backend Running"}
