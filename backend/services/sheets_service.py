@@ -9,7 +9,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# 🔥 Initialize ONCE (important)
+# 🔥 Initialize ONCE
 credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
 
 credentials = service_account.Credentials.from_service_account_info(
@@ -21,6 +21,9 @@ client = gspread.authorize(credentials)
 
 
 def get_sheet(sheet_id):
+    if not sheet_id:
+        raise ValueError("Sheet ID missing")
+
     try:
         return client.open_by_key(sheet_id).sheet1
     except Exception as e:
@@ -30,6 +33,10 @@ def get_sheet(sheet_id):
 
 def save_to_sheet(name, phone, date, time, sheet_id, status="Booked"):
     try:
+        if not sheet_id:
+            print("⚠️ Skipping sheet save (no sheet_id)")
+            return
+
         sheet = get_sheet(sheet_id)
 
         sheet.append_row([

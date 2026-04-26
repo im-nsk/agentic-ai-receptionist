@@ -2,13 +2,19 @@ import os
 import phonenumbers
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
+import time
 
-# ---------- INIT (once) ----------
+# ---------- INIT ----------
 TWILIO_SID = os.getenv("TWILIO_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE = os.getenv("TWILIO_PHONE")
 
-client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
+client = None
+
+if TWILIO_SID and TWILIO_AUTH_TOKEN:
+    client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
+else:
+    print("⚠️ Twilio not configured. SMS disabled.")
 
 
 # ---------- PHONE NORMALIZATION ----------
@@ -30,9 +36,12 @@ def normalize_phone(phone, default_region="US"):
 
 
 # ---------- SMS SENDER ----------
-import time
-
 def send_sms(phone, message, retries=2):
+
+    if not client or not TWILIO_PHONE:
+        print("⚠️ SMS skipped (Twilio not configured)")
+        return False
+
     normalized_phone = normalize_phone(phone)
 
     if not normalized_phone:

@@ -9,6 +9,7 @@ from dateutil import parser
 
 from backend.services.sheets_service import save_to_sheet
 
+
 # ---------------- GOOGLE CREDENTIALS ---------------- #
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
@@ -26,14 +27,9 @@ service = build('calendar', 'v3', credentials=credentials)
 
 def parse_datetime(date, time, timezone):
     try:
-        # Parse natural language
         dt = parser.parse(f"{date} {time}", fuzzy=True)
-
-        # Attach timezone (VERY IMPORTANT)
         tz = ZoneInfo(timezone)
-        dt = dt.replace(tzinfo=tz)
-
-        return dt
+        return dt.replace(tzinfo=tz)
 
     except Exception:
         raise ValueError(f"Invalid date/time input: {date} {time}")
@@ -55,11 +51,14 @@ def check_availability(date, time, calendar_id, timezone):
 
     booking_dt = parse_datetime(date, time, timezone)
 
-    # Convert to UTC for Google Calendar
+    # ❌ Missing config safety
+    if not calendar_id:
+        return False
+
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
     end_time = start_time + timedelta(minutes=30)
 
-    # ❌ Past time
+    # ❌ Past
     if start_time <= datetime.now(ZoneInfo("UTC")):
         return False
 
@@ -84,23 +83,26 @@ def check_availability(date, time, calendar_id, timezone):
 
 def create_event(name, phone, date, time, calendar_id, sheet_id, timezone):
     try:
+        if not calendar_id or not sheet_id:
+            return False
+
         booking_dt = parse_datetime(date, time, timezone)
 
         if not check_availability(date, time, calendar_id, timezone):
             return False
 
-        start_time_local = booking_dt
-        end_time_local = start_time_local + timedelta(minutes=30)
+        start_time = booking_dt
+        end_time = start_time + timedelta(minutes=30)
 
         event = {
             'summary': f'Appointment with {name}',
             'description': f'Phone: {phone}',
             'start': {
-                'dateTime': start_time_local.isoformat(),
+                'dateTime': start_time.isoformat(),
                 'timeZone': timezone,
             },
             'end': {
-                'dateTime': end_time_local.isoformat(),
+                'dateTime': end_time.isoformat(),
                 'timeZone': timezone,
             },
         }
@@ -110,12 +112,12 @@ def create_event(name, phone, date, time, calendar_id, sheet_id, timezone):
             body=event
         ).execute()
 
-        # Save to sheet (local readable time)
+        # Save to sheet
         save_to_sheet(
             name,
             phone,
-            start_time_local.strftime("%Y-%m-%d"),
-            start_time_local.strftime("%H:%M"),
+            start_time.strftime("%Y-%m-%d"),
+            start_time.strftime("%H:%M"),
             sheet_id=sheet_id
         )
 
