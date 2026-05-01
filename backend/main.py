@@ -1,15 +1,17 @@
 """
-main.py — Production-ready FastAPI backend
+main.py — Clean Production Version
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from backend.db.database import SessionLocal
-from backend.db.init_db import init_db
-from backend.models.booking import BookingRequest
+from backend.db.database import engine, SessionLocal
+from backend.models import Base
 from backend.models.client import Client
+from backend.models.booking import BookingRequest
+
 from backend.services.calendar_service import check_availability, create_event, parse_datetime
 from backend.services.sms_service import send_sms
 from backend.services.auth_service import (
@@ -19,16 +21,17 @@ from backend.services.auth_service import (
     decode_token
 )
 
-
 # ---------------- INIT ---------------- #
-init_db()
 app = FastAPI()
+
+# Create tables (safe for now)
+Base.metadata.create_all(bind=engine)
 
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # tighten later in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,6 +45,23 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# ---------------- REQUEST MODELS ---------------- #
+class SignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SetupRequest(BaseModel):
+    calendar_id: str
+    sheet_id: str
 
 
 # ---------------- AUTH ---------------- #
@@ -66,37 +86,45 @@ def home():
 
 # ---------------- SIGNUP ---------------- #
 @app.post("/signup")
-def signup(data: dict, db: Session = Depends(get_db)):
+def signup(data: SignupRequest, db: Session = Depends(get_db)):
+    try:
+        existing = db.query(Client).filter(Client.email == data.email).first()
 
-    existing = db.query(Client).filter(Client.email == data["email"]).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already exists")
 
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already exists")
+        client = Client(
+            name=data.name,
+            email=data.email,
+            password=hash_password(data.password)
+        )
 
-    client = Client(
-        name=data["name"],
-        email=data["email"],
-        password=hash_password(data["password"])
-    )
+        db.add(client)
+        db.commit()
 
-    db.add(client)
-    db.commit()
+        return {"status": "created"}
 
-    return {"status": "created"}
+    except Exception as e:
+        print("❌ SIGNUP ERROR:", repr(e))
+        raise HTTPException(status_code=500, detail="Signup failed")
 
 
 # ---------------- LOGIN ---------------- #
 @app.post("/login")
-def login(data: dict, db: Session = Depends(get_db)):
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    try:
+        client = db.query(Client).filter(Client.email == data.email).first()
 
-    client = db.query(Client).filter(Client.email == data["email"]).first()
+        if not client or not verify_password(data.password, client.password):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not client or not verify_password(data["password"], client.password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        token = create_access_token({"client_id": client.id})
 
-    token = create_access_token({"client_id": client.id})
+        return {"access_token": token}
 
-    return {"access_token": token}
+    except Exception as e:
+        print("❌ LOGIN ERROR:", repr(e))
+        raise HTTPException(status_code=500, detail="Login failed")
 
 
 # ---------------- CLIENT ---------------- #
@@ -120,7 +148,7 @@ def get_client_data(
 # ---------------- SETUP ---------------- #
 @app.post("/setup")
 def setup(
-    data: dict,
+    data: SetupRequest,
     client_id: str = Depends(get_current_client_id),
     db: Session = Depends(get_db)
 ):
@@ -129,8 +157,8 @@ def setup(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    client.calendar_id = data.get("calendar_id")
-    client.sheet_id = data.get("sheet_id")
+    client.calendar_id = data.calendar_id
+    client.sheet_id = data.sheet_id
 
     db.commit()
 
@@ -150,8 +178,6 @@ def availability(
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
 
-        booking_dt = parse_datetime(req.date, req.time, client.timezone)
-
         is_available = check_availability(
             req.date,
             req.time,
@@ -168,6 +194,7 @@ def availability(
         print("❌ Availability Error:", repr(e))
         raise HTTPException(status_code=500, detail="Availability failed")
 
+
 # ---------------- BOOK ---------------- #
 @app.post("/book-appointment")
 def book(
@@ -183,10 +210,7 @@ def book(
             raise HTTPException(status_code=404, detail="Client not found")
 
         if not client.calendar_id or not client.sheet_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Client setup incomplete"
-            )
+            raise HTTPException(status_code=400, detail="Client setup incomplete")
 
         success = create_event(
             req.name,
