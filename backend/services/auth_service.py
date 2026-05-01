@@ -2,6 +2,7 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 import os
+import hashlib
 
 # 🔐 Secret key (use ENV in production)
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
@@ -11,13 +12,20 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-# 🔒 Hash password
+# 🔒 Hash password (FIXED for bcrypt limit)
 def hash_password(password: str):
+    # bcrypt max = 72 bytes → normalize if longer
+    if len(password.encode("utf-8")) > 72:
+        password = hashlib.sha256(password.encode()).hexdigest()
+
     return pwd_context.hash(password)
 
 
-# 🔍 Verify password
+# 🔍 Verify password (must match same logic)
 def verify_password(plain, hashed):
+    if len(plain.encode("utf-8")) > 72:
+        plain = hashlib.sha256(plain.encode()).hexdigest()
+
     return pwd_context.verify(plain, hashed)
 
 
