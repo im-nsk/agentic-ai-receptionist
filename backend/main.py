@@ -1,5 +1,5 @@
 """
-main.py — Clean Production Version
+main.py — Final Production Clean
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Header, Depends
@@ -7,12 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from backend.db.database import engine, SessionLocal
-from backend.models import Base
+from backend.db.database import engine, SessionLocal, Base
 from backend.models.client import Client
 from backend.models.booking import BookingRequest
 
-from backend.services.calendar_service import check_availability, create_event, parse_datetime
+from backend.services.calendar_service import check_availability, create_event
 from backend.services.sms_service import send_sms
 from backend.services.auth_service import (
     hash_password,
@@ -24,19 +23,16 @@ from backend.services.auth_service import (
 # ---------------- INIT ---------------- #
 app = FastAPI()
 
-# Create tables (safe for now)
 Base.metadata.create_all(bind=engine)
-
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ---------------- DB ---------------- #
 def get_db():
@@ -45,7 +41,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 # ---------------- REQUEST MODELS ---------------- #
 class SignupRequest(BaseModel):
@@ -65,15 +60,14 @@ class SetupRequest(BaseModel):
 
 
 # ---------------- AUTH ---------------- #
-def get_current_client_id(authorization: str = Header()):
-    try:
-        if not authorization or " " not in authorization:
-            raise Exception()
+def get_current_client_id(authorization: str = Header(None)):
+    if not authorization or " " not in authorization:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
+    try:
         token = authorization.split(" ")[1]
         payload = decode_token(token)
         return payload["client_id"]
-
     except:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -87,12 +81,12 @@ def home():
 # ---------------- SIGNUP ---------------- #
 @app.post("/signup")
 def signup(data: SignupRequest, db: Session = Depends(get_db)):
+    existing = db.query(Client).filter(Client.email == data.email).first()
+
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already exists")
+
     try:
-        existing = db.query(Client).filter(Client.email == data.email).first()
-
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already exists")
-
         client = Client(
             name=data.name,
             email=data.email,
@@ -105,6 +99,7 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
         return {"status": "created"}
 
     except Exception as e:
+        db.rollback()
         print("❌ SIGNUP ERROR:", repr(e))
         raise HTTPException(status_code=500, detail="Signup failed")
 
@@ -112,19 +107,14 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
 # ---------------- LOGIN ---------------- #
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
-    try:
-        client = db.query(Client).filter(Client.email == data.email).first()
+    client = db.query(Client).filter(Client.email == data.email).first()
 
-        if not client or not verify_password(data.password, client.password):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not client or not verify_password(data.password, client.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        token = create_access_token({"client_id": client.id})
+    token = create_access_token({"client_id": client.id})
 
-        return {"access_token": token}
-
-    except Exception as e:
-        print("❌ LOGIN ERROR:", repr(e))
-        raise HTTPException(status_code=500, detail="Login failed")
+    return {"access_token": token}
 
 
 # ---------------- CLIENT ---------------- #
