@@ -11,3 +11,4 @@ phonenumbers
 twilio
 python-dateutil
 psycopg2-binary
+pydantic
