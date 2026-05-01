@@ -1,21 +1,6 @@
-/**
- * Login.jsx (Production Ready - Final)
- *
- * - JWT auth (centralized)
- * - Auto redirect (safe)
- * - Prevent duplicate requests
- * - Enter key support
- * - Better validation + UX
- */
-
-/**
- * Login.jsx (FINAL Production Safe)
- */
-
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { login } from "@/api/client";
-import { setToken } from "@/utils/auth";
 import { setToken, getToken, isTokenExpired } from "@/utils/auth";
 
 export default function Login() {
@@ -30,9 +15,7 @@ export default function Login() {
 
   const navigate = useNavigate();
 
-  /**
-   * 🔁 Auto redirect
-   */
+  // 🔁 Auto redirect
   useEffect(() => {
     const token = getToken();
 
@@ -43,10 +26,10 @@ export default function Login() {
     }
   }, [navigate]);
 
-  /**
-   * 🔐 Handle Login
-   */
+  // 🔐 Handle Login
   const handleLogin = async () => {
+    console.log("[login] Button clicked");
+
     if (loading) return;
 
     setError("");
@@ -59,7 +42,6 @@ export default function Login() {
       return;
     }
 
-    // ✅ Optional email validation
     if (!email.includes("@")) {
       setError("Enter a valid email");
       return;
@@ -68,18 +50,23 @@ export default function Login() {
     try {
       setLoading(true);
 
+      console.log("[login] Calling login API", { email });
+
       const res = await login({ email, password });
+
+      console.log("[login] API response received", res);
 
       if (!res?.access_token) {
         throw new Error("Invalid response");
       }
 
       setToken(res.access_token);
+      console.log("[login] Token stored, navigating to dashboard");
 
       navigate("/dashboard");
 
     } catch (err) {
-      console.error(err);
+      console.error("LOGIN ERROR:", err);
 
       const msg = err.message?.toLowerCase() || "";
 
@@ -92,18 +79,14 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
-  }; // ✅ FIXED (function closed properly)
+  };
 
-  /**
-   * ⌨️ Enter key support
-   */
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
       handleLogin();
     }
   };
 
-  // ⏳ Avoid flicker
   if (checkingAuth) {
     return <div style={styles.center}>Checking session...</div>;
   }
@@ -159,9 +142,6 @@ export default function Login() {
   );
 }
 
-/**
- * 🎨 Styles
- */
 const styles = {
   container: {
     height: "100vh",

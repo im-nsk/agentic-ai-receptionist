@@ -1,60 +1,64 @@
-/**
- * client.js
- *
- * Central API layer
- * - Handles auth
- * - Handles errors
- * - Auto logout on 401
- */
-/**
- * client.js (FINAL Production Safe)
- */
-
 import { getToken, logout, isTokenExpired } from "../utils/auth";
 
-const BASE_URL =
+const RAW_BASE_URL =
   import.meta.env.VITE_API_URL ||
   "https://agentic-ai-receptionist.onrender.com";
+const BASE_URL = RAW_BASE_URL.replace(/\/$/, "");
 
 /**
- * 🔐 Build headers safely
+ * Build request headers.
+ * Public routes (login/signup) should not force logout redirects.
  */
-function getAuthHeaders(extraHeaders = {}) {
+function getHeaders(extraHeaders = {}, withAuth = true) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
+
+  if (!withAuth) return headers;
+
   const token = getToken();
 
-  // ✅ Fix: logout immediately if token invalid
-  if (!token || isTokenExpired(token)) {
+  if (!token) {
+    return headers;
+  }
+
+  if (isTokenExpired(token)) {
+    console.warn("[api] Token expired while preparing request");
     logout();
-    return {
-      "Content-Type": "application/json",
-      ...extraHeaders,
-    };
+    return headers;
   }
 
   return {
-    "Content-Type": "application/json",
+    ...headers,
     Authorization: `Bearer ${token}`,
-    ...extraHeaders,
   };
 }
 
-/**
- * 🌐 Core API handler
- */
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(endpoint, options = {}, config = {}) {
+  const { withAuth = true } = config;
+  const url = `${BASE_URL}${endpoint}`;
+
+  console.log("[api] Request start", {
+    endpoint,
+    method: options.method || "GET",
+    url,
+    withAuth,
+  });
+
   try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
+    const res = await fetch(url, {
       ...options,
-      headers: getAuthHeaders(options.headers),
+      headers: getHeaders(options.headers, withAuth),
     });
 
-    // 🔥 Auto logout if unauthorized
+    console.log("[api] Response status", { endpoint, status: res.status });
+
     if (res.status === 401) {
       logout();
       throw new Error("unauthorized");
     }
 
-    // ❌ Handle server errors properly
     if (!res.ok) {
       let message = "Something went wrong";
 
@@ -86,14 +90,14 @@ export function signup(data) {
   return apiRequest("/signup", {
     method: "POST",
     body: JSON.stringify(data),
-  });
+  }, { withAuth: false });
 }
 
 export function login(data) {
   return apiRequest("/login", {
     method: "POST",
     body: JSON.stringify(data),
-  });
+  }, { withAuth: false });
 }
 
 //
@@ -107,11 +111,6 @@ export function getClient() {
 }
 
 //
-// ========================
-// ⚙️ SETUP API (🔥 YOU MISSED THIS BEFORE)
-// ========================
-//
-
 export function saveSetup(data) {
   return apiRequest("/setup", {
     method: "POST",

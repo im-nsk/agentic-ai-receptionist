@@ -12,8 +12,8 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getClient } from "../api/client";
-import { getToken, logout, isTokenExpired } from "../utils/auth";
+import { getClient } from "@/api/client";
+import { getToken, logout, isTokenExpired } from "@/utils/auth";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
