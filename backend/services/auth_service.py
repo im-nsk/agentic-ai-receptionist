@@ -15,6 +15,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # 🔒 Hash password (FIXED for bcrypt limit)
 def hash_password(password: str):
     # bcrypt max = 72 bytes → normalize if longer
+    print("🔥 NEW HASH FUNCTION RUNNING")  # ADD THIS
     if len(password.encode("utf-8")) > 72:
         password = hashlib.sha256(password.encode()).hexdigest()
 
@@ -29,7 +30,7 @@ def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
 
-# 🎫 Create JWT token
+# 🎫 Create JWT ¯¸token
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
