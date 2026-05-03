@@ -1,138 +1,177 @@
-import React, { useEffect, useState } from 'react';
-import { Card } from '../components/ui/Card';
-import { Table, TableRow, TableCell } from '../components/ui/Table';
-import { Calendar, Users, Target, Activity, Clock } from 'lucide-react';
-import { motion } from 'motion/react';
-import client from '../api/client';
-import { useAuth } from '../context/AuthContext';
+import React, { useState } from 'react';
+import { Card } from '@/components/ui/Card';
+import { Table, TableCell, TableRow } from '@/components/ui/Table';
+import { BarChart3, Calendar, Clock, Phone, Target } from 'lucide-react';
+import { useAuth } from '@/hooks/AuthContext';
+import {
+  aggregateLast7DayCounts,
+  getStoredBookings,
+  successRateFromStored,
+  sumConfirmedBookings,
+} from '@/utils/bookingStorage';
+
+function barHeightClass(count: number, max: number): string {
+  if (max <= 0 || count <= 0) return 'h-2';
+  const ratio = count / max;
+  if (ratio <= 0.2) return 'h-8';
+  if (ratio <= 0.4) return 'h-14';
+  if (ratio <= 0.6) return 'h-20';
+  if (ratio <= 0.8) return 'h-28';
+  return 'h-32';
+}
 
 export const Dashboard: React.FC = () => {
-  const { user } = useAuth();
-  const [clientInfo, setClientInfo] = useState<{ name: string; minutes_used: number; plan_limit: number } | null>(null);
+  const { profile } = useAuth();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bookings = getStoredBookings();
+  const totalBookings = sumConfirmedBookings();
+  const successRate = successRateFromStored();
+  const trends = aggregateLast7DayCounts();
+  const maxTrend = Math.max(...trends, 1);
+  const recent = bookings.slice(0, 8);
 
-  useEffect(() => {
-    const fetchClientInfo = async () => {
-      try {
-        const response = await client.get('/client');
-        setClientInfo(response.data);
-      } catch (error) {
-        console.error('Error fetching client info:', error);
-      }
-    };
-    fetchClientInfo();
-  }, []);
+  const dayLabels = Array.from({ length: 7 }, (_, idx) => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    now.setDate(now.getDate() - (6 - idx));
+    return now.toLocaleDateString(undefined, { weekday: 'short' });
+  });
 
-  const stats = [
-    { title: "Minutes Used", value: clientInfo ? `${clientInfo.minutes_used}` : '...', icon: <Activity className="text-blue-600" />, change: clientInfo ? `of ${clientInfo.plan_limit}` : '', trend: 'neutral' },
-    { title: "Today's Bookings", value: '12', icon: <Calendar className="text-blue-600" />, change: '+20%', trend: 'up' },
-    { title: 'Upcoming Appointments', value: '48', icon: <Users className="text-purple-600" />, change: '+5%', trend: 'up' },
-    { title: 'Success Rate', value: '98%', icon: <Target className="text-green-600" />, change: 'Optimal', trend: 'neutral' },
-  ];
-
-  const recentActivity = [
-    { id: 1, action: 'Booking Confirmed', client: 'James Wilson', time: '10 mins ago', status: 'Success' },
-    { id: 2, action: 'Appointment Rescheduled', client: 'Sarah Miller', time: '45 mins ago', status: 'Pending' },
-    { id: 3, action: 'Inquiry Resolved', client: 'Robert Ford', time: '2 hours ago', status: 'Success' },
-    { id: 4, action: 'New Booking Request', client: 'Emily Stone', time: '3 hours ago', status: 'Success' },
-  ];
+  const avgCallDuration = '45s';
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between">
+    <div className="space-y-8">
+      <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Welcome Back, {user?.name || clientInfo?.name || 'Receptionist'}</h1>
-          <p className="text-slate-500">Here's an overview of your business today.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
+            {profile?.name ? `Hello, ${profile.name}` : 'Dashboard'}
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400">Track booking performance</p>
         </div>
-        <div className="flex h-10 w-fit items-center gap-2 rounded-lg bg-white px-3 shadow-sm border border-slate-200">
-           <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-           <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">AI Live Now</span>
-        </div>
+        <button
+          type="button"
+          onClick={() => setRefreshKey((k) => k + 1)}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+        >
+          Refresh
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, i) => (
-          <Card key={i} className="flex items-center space-x-4 p-5 hover:bg-white/40 transition-all group">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/50 border border-white/50 shadow-sm transition-transform group-hover:scale-110">
-              {stat.icon}
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                {stat.title}
-              </p>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-slate-800">{stat.value}</span>
-                <span className={`text-xs font-bold ${
-                  stat.trend === 'up' ? 'text-emerald-500' : 
-                  stat.trend === 'down' ? 'text-blue-500' : 'text-slate-400'
-                }`}>
-                  {stat.change}
-                </span>
-              </div>
-            </div>
-          </Card>
-        ))}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Card className="flex gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            <Calendar className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Total bookings
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">{totalBookings}</p>
+          </div>
+        </Card>
+        <Card className="flex gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+            <Target className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Success rate
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">
+              {successRate === null ? '--' : `${successRate}%`}
+            </p>
+          </div>
+        </Card>
+        <Card className="flex gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            <Clock className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Avg call duration
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">{avgCallDuration}</p>
+          </div>
+        </Card>
+        <Card className="flex gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300">
+            <BarChart3 className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              This week
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">
+              {trends.reduce((a, b) => a + b, 0)}
+            </p>
+          </div>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2" title="Booking Trends" description="Weekly booking volume visualization">
-          <div className="flex h-[300px] w-full flex-col items-center justify-center space-y-4 rounded-xl bg-white/20 border border-white/30 text-slate-300 font-bold text-sm">
-            <Activity size={48} className="text-blue-200/50 mb-2" />
-            <div className="flex items-end gap-2 h-32 w-full max-w-md px-4">
-              {[40, 60, 85, 70, 50, 90, 45].map((h, i) => (
-                <div key={i} className="w-full bg-blue-500/30 rounded-t-lg transition-all hover:bg-blue-600/50 cursor-pointer border border-white/20" style={{ height: `${h}%` }}></div>
-              ))}
-            </div>
-            <div className="flex justify-between w-full max-w-md px-4 text-[10px] uppercase tracking-widest font-bold">
-              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-            </div>
-          </div>
-        </Card>
-
-        <Card title="Today's Schedule" description="Your upcoming appointments for today.">
-          <div className="space-y-4">
-            {[1, 2, 3].map((_, i) => (
-              <div key={i} className="flex items-center justify-between rounded-xl border border-white/30 bg-white/20 p-3 hover:bg-white/40 transition-all cursor-pointer group">
-                <div className="flex items-center gap-3">
-                   <div className="h-10 w-10 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-bold border border-white/50 group-hover:rotate-6 transition-transform">
-                      {['JM', 'SM', 'RF'][i]}
-                   </div>
-                   <div>
-                     <p className="text-sm font-bold text-slate-800">{['James Miller', 'Sarah Stone', 'Ray Ford'][i]}</p>
-                     <p className="text-[10px] font-bold text-slate-400 flex items-center gap-1 uppercase tracking-wider">
-                        <Clock size={12} />
-                        {[ '10:30 AM', '1:00 PM', '4:15 PM'][i]}
-                     </p>
-                   </div>
+        <Card className="lg:col-span-2" title="Booking trends" description="Last seven session days">
+          <div className="flex h-48 items-end gap-2 border-t border-slate-100 pt-6 dark:border-slate-800">
+            {trends.map((count, i) => (
+              <div key={`${dayLabels[i]}-${count}`} className="flex flex-1 flex-col items-center gap-2">
+                <div className="flex h-36 w-full items-end justify-center">
+                  <div
+                    className={`w-full max-w-[2.5rem] rounded-lg bg-blue-600/90 dark:bg-blue-500 ${barHeightClass(count, maxTrend)}`}
+                  />
                 </div>
-                <div className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-emerald-100/50 text-emerald-700 border border-emerald-200/50">
-                  Confirmed
-                </div>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  {dayLabels[i]}
+                </span>
               </div>
             ))}
-            <button className="w-full py-2.5 text-xs font-bold uppercase tracking-widest text-blue-600 hover:bg-white/40 rounded-xl transition-all border border-transparent hover:border-white/50">
-               View Full Schedule
-            </button>
           </div>
+        </Card>
+        <Card title="Data source">
+          <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
+            <li>Google Calendar handles events and availability.</li>
+            <li>Google Sheets keeps booking records.</li>
+            <li>Dashboard tiles show local booking actions.</li>
+          </ul>
         </Card>
       </div>
 
-      <Card title="Recent AI Activity" description="Log of the latest AI receptionist interactions.">
-          <Table headers={['Event', 'Client', 'Time', 'Outcome']}>
-            {recentActivity.map((act) => (
-              <TableRow key={act.id}>
-                <TableCell className="font-medium">{act.action}</TableCell>
-                <TableCell>{act.client}</TableCell>
-                <TableCell>{act.time}</TableCell>
+      <Card title="Recent bookings" description="Latest confirmed activity">
+        {recent.length === 0 ? (
+          <p className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+            No bookings yet. Start from Booking.
+          </p>
+        ) : (
+          <Table headers={['Guest', 'When', 'Phone', 'Outcome']}>
+            {recent.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell className="font-medium text-slate-900 dark:text-slate-100">{row.name}</TableCell>
                 <TableCell>
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                    act.status === 'Success' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                  }`}>
-                    {act.status}
+                  {row.date}{' '}
+                  <span className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                    <Clock className="h-3 w-3" />
+                    {row.time}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span className="inline-flex items-center gap-1">
+                    <Phone className="h-3 w-3 text-slate-400" />
+                    {row.phone}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      row.status === 'confirmed'
+                        ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
+                        : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200'
+                    }`}
+                  >
+                    {row.status}
                   </span>
                 </TableCell>
               </TableRow>
             ))}
           </Table>
+        )}
       </Card>
     </div>
   );

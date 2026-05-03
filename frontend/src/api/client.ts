@@ -1,19 +1,20 @@
 import axios from 'axios';
-import { getToken, isTokenExpired, logout } from '../utils/auth';
+import { getToken, isTokenExpired, logout } from '@/utils/auth';
 
-const BASE_URL =
-  import.meta.env.VITE_API_URL || 'https://agentic-ai-receptionist.onrender.com';
+const RAW_BASE_URL = import.meta.env.VITE_API_URL || 'https://agentic-ai-receptionist.onrender.com';
+const BASE_URL = RAW_BASE_URL.replace(/\/$/, '');
 
-const client = axios.create({
+export const api = axios.create({
   baseURL: BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-client.interceptors.request.use((config) => {
-  const token = getToken();
+api.interceptors.request.use((config) => {
+  if (config.skipAuth) return config;
 
+  const token = getToken();
   if (!token) return config;
 
   if (isTokenExpired(token)) {
@@ -25,20 +26,87 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
-client.interceptors.response.use(
+api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
       logout();
     }
 
-    const message =
-      err.response?.data?.detail ||
-      err.response?.data?.message ||
-      'Something went wrong';
-
-    return Promise.reject(new Error(message));
+    return Promise.reject(err);
   }
 );
 
-export default client;
+export interface SignupPayload {
+  name: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+}
+
+export interface ClientResponse {
+  name: string;
+  minutes_used: number;
+  plan_limit: number;
+}
+
+export interface SetupPayload {
+  calendar_id: string;
+  sheet_id: string;
+  timezone?: string;
+}
+
+export interface AppointmentPayload {
+  client_id: string;
+  name: string;
+  phone: string;
+  date: string;
+  time: string;
+}
+
+export interface AvailabilityResponse {
+  available: boolean;
+  message: string;
+}
+
+export interface BookResponse {
+  status: string;
+}
+
+export async function signup(payload: SignupPayload) {
+  const { data } = await api.post<{ status: string }>('/signup', payload, { skipAuth: true });
+  return data;
+}
+
+export async function login(payload: LoginPayload) {
+  const { data } = await api.post<LoginResponse>('/login', payload, { skipAuth: true });
+  return data;
+}
+
+export async function getClient() {
+  const { data } = await api.get<ClientResponse>('/client');
+  return data;
+}
+
+export async function postSetup(payload: SetupPayload) {
+  const { data } = await api.post<{ status: string }>('/setup', payload);
+  return data;
+}
+
+export async function checkAvailability(payload: AppointmentPayload) {
+  const { data } = await api.post<AvailabilityResponse>('/check-availability', payload);
+  return data;
+}
+
+export async function bookAppointment(payload: AppointmentPayload) {
+  const { data } = await api.post<BookResponse>('/book-appointment', payload);
+  return data;
+}

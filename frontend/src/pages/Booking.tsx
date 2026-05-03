@@ -1,227 +1,177 @@
 import React, { useState } from 'react';
-import { Card } from '../components/ui/Card';
-import { Input } from '../components/ui/Input';
-import { Button } from '../components/ui/Button';
-import { Table, TableRow, TableCell } from '../components/ui/Table';
-import { Calendar as CalendarIcon, Download, Search, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import client from '../api/client';
-import { cn } from '../lib/utils';
+import { BookResponse, bookAppointment, checkAvailability } from '@/api/client';
+import { getApiErrorMessage } from '@/api/errors';
+import { MonthCalendar } from '@/components/MonthCalendar';
+import { Card } from '@/components/ui/Card';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { getClientIdFromToken } from '@/utils/auth';
+import { addStoredBooking, toISODateLocal } from '@/utils/bookingStorage';
+import { WORK_TIME_SLOTS } from '@/utils/slots';
 
 export const Booking: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'schedule' | 'records'>('schedule');
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [customerName, setCustomerName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [message, setMessage] = useState<string>('');
+  const [error, setError] = useState('');
+
+  const dateIso = toISODateLocal(selectedDate);
+
+  const checkSlot = async (time: string) => {
+    const clientId = getClientIdFromToken();
+    if (!clientId) return;
+    setChecking(true);
+    setAvailable(null);
+    setError('');
+    try {
+      const res = await checkAvailability({
+        client_id: clientId,
+        name: 'check',
+        phone: '0000000000',
+        date: dateIso,
+        time,
+      });
+      setAvailable(res.available);
+      setMessage(res.message);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const handleBooking = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName || !phoneNumber || !selectedDate || !selectedTime) {
-      setMessage({ type: 'error', text: 'Please fill in all fields' });
+    const clientId = getClientIdFromToken();
+    const cleanName = name.trim();
+    const cleanPhone = phone.trim();
+    if (!clientId) {
+      setError('Session expired. Sign in again.');
       return;
     }
-
+    if (!selectedTime || !cleanName || !cleanPhone) {
+      setError('Fill all booking fields.');
+      return;
+    }
+    if (available !== true) {
+      setError('Choose an available time slot.');
+      return;
+    }
     setIsLoading(true);
-    setMessage(null);
-
-    const payload = {
-      date: selectedDate,
-      time: selectedTime,
-      name: customerName,
-      phone: phoneNumber
-    };
-
+    setError('');
+    setMessage('');
     try {
-      // First check availability
-      const availRes = await client.post('/check-availability', payload);
-      
-      if (availRes.status === 200) {
-        // Now book
-        await client.post('/book-appointment', payload);
-        setMessage({ type: 'success', text: 'Appointment booked successfully!' });
-        setCustomerName('');
-        setPhoneNumber('');
+      const res: BookResponse = await bookAppointment({
+        client_id: clientId,
+        name: cleanName,
+        phone: cleanPhone,
+        date: dateIso,
+        time: selectedTime,
+      });
+      const ok = res.status === 'confirmed';
+      addStoredBooking({
+        name: cleanName,
+        phone: cleanPhone,
+        date: dateIso,
+        time: selectedTime,
+        status: ok ? 'confirmed' : 'failed',
+      });
+      if (!ok) {
+        setError('Slot could not be confirmed.');
+      } else {
+        setName('');
+        setPhone('');
         setSelectedTime(null);
+        setAvailable(null);
+        setMessage('Appointment confirmed.');
       }
-    } catch (error: any) {
-      console.error('Booking error:', error);
-      const errorMsg = error.response?.data?.message || 'Failed to book appointment. Please try again.';
-      setMessage({ type: 'error', text: errorMsg });
+    } catch (err) {
+      setError(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const timeSlots = [
-    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
-    '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM'
-  ];
-
-  const bookingRecords = [
-    { name: 'Sarah Jenkins', phone: '+1 234 567 8901', date: '2023-10-24', time: '10:30 AM', status: 'Confirmed' },
-    { name: 'Michael Thorne', phone: '+1 234 567 8902', date: '2023-10-23', time: '02:15 PM', status: 'Completed' },
-    { name: 'Alisa Vohra', phone: '+1 234 567 8903', date: '2023-10-23', time: '09:00 AM', status: 'Confirmed' },
-    { name: 'Gregory House', phone: '+1 234 567 8904', date: '2023-10-22', time: '04:45 PM', status: 'Cancelled' },
-  ];
-
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-8">
+      <div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Booking Management</h1>
-          <p className="text-slate-500">Organize and track all incoming appointments.</p>
-        </div>
-        <div className="inline-flex rounded-xl bg-white/30 p-1 border border-white/20 glass">
-          <button
-            onClick={() => setActiveTab('schedule')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-bold uppercase tracking-widest transition-all ${
-              activeTab === 'schedule' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Schedule
-          </button>
-          <button
-            onClick={() => setActiveTab('records')}
-            className={`rounded-lg px-4 py-1.5 text-xs font-bold uppercase tracking-widest transition-all ${
-              activeTab === 'records' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Records
-          </button>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Booking</h1>
+          <p className="text-slate-500 dark:text-slate-400">Schedule and confirm appointments instantly</p>
         </div>
       </div>
 
-      {activeTab === 'schedule' ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          {/* Calendar Picker (Simple Placeholder representation) */}
-          <Card className="lg:col-span-7" title="Select Date">
-             <div className="grid grid-cols-7 gap-2 text-center mb-4">
-                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => (
-                  <div key={d} className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{d}</div>
-                ))}
-             </div>
-             <div className="grid grid-cols-7 gap-2">
-                {Array.from({ length: 31 }).map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setSelectedDate(`2023-10-${i+1}`)}
-                    className={`h-10 rounded-xl text-sm font-bold transition-all border ${
-                      i + 1 === 24 
-                        ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' 
-                        : 'bg-white/40 border-white/40 text-slate-600 hover:bg-white/80'
-                    }`}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
-             </div>
-             <div className="mt-8 pt-8 border-t border-white/20">
-               <div className="flex items-center gap-2 text-slate-500">
-                 <CalendarIcon size={18} className="text-blue-600" />
-                 <span className="text-xs font-bold uppercase tracking-wider">Selected Date:</span>
-                 <span className="text-sm font-bold text-slate-800">October 24, 2023</span>
-               </div>
-             </div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <Card className="lg:col-span-5 xl:col-span-4" title="Calendar" description="Select booking day">
+          <MonthCalendar selected={selectedDate} onSelect={setSelectedDate} />
+          <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400">
+            Selected:&nbsp;
+            <strong className="text-slate-900 dark:text-slate-100">
+              {selectedDate.toLocaleDateString(undefined, {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </strong>
+          </p>
+        </Card>
+
+        <div className="space-y-6 lg:col-span-7 xl:col-span-8">
+          <Card title="Time slots" description="Check availability before booking">
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
+              {WORK_TIME_SLOTS.map((slot) => (
+                <button
+                  key={slot}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTime(slot);
+                    void checkSlot(slot);
+                  }}
+                  className={`rounded-xl border px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide transition-colors sm:text-xs ${
+                    selectedTime === slot
+                      ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-600/25'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-blue-400 hover:bg-blue-50/60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
+                  }`}
+                >
+                  {slot}
+                </button>
+              ))}
+            </div>
+            {checking && <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">Checking slot...</p>}
+            {selectedTime && !checking && message && available === true && (
+              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-100">
+                {message}
+              </div>
+            )}
+            {selectedTime && !checking && message && available === false && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-50">
+                {message}
+              </div>
+            )}
           </Card>
 
-          {/* Time & Booking Section */}
-          <div className="lg:col-span-5 space-y-6">
-            <Card title="Available Time Slots">
-              <div className="grid grid-cols-3 gap-2">
-                {timeSlots.map(slot => (
-                  <button
-                    key={slot}
-                    onClick={() => setSelectedTime(slot)}
-                    className={`rounded-xl py-2.5 text-[10px] font-bold uppercase tracking-widest transition-all border ${
-                      selectedTime === slot
-                        ? 'bg-blue-600 border-blue-600 text-white ring-4 ring-blue-100 shadow-md'
-                        : 'bg-white/40 border-white/40 text-slate-500 hover:border-blue-400 hover:text-blue-600'
-                    }`}
-                  >
-                    {slot}
-                  </button>
-                ))}
-              </div>
-            </Card>
-
-            <Card title="New Booking Detail">
-               <form className="space-y-4" onSubmit={handleBooking}>
-                 <Input 
-                   label="Customer Name" 
-                   placeholder="John Doe" 
-                   value={customerName}
-                   onChange={(e) => setCustomerName(e.target.value)}
-                   disabled={isLoading}
-                 />
-                 <Input 
-                   label="Phone Number" 
-                   placeholder="+1 234 567 8900" 
-                   value={phoneNumber}
-                   onChange={(e) => setPhoneNumber(e.target.value)}
-                   disabled={isLoading}
-                 />
-                 {message && (
-                   <p className={cn(
-                     "text-sm font-medium text-center",
-                     message.type === 'success' ? "text-emerald-600" : "text-red-500"
-                   )}>
-                     {message.text}
-                   </p>
-                 )}
-                 <Button 
-                   type="submit" 
-                   className="w-full text-xs font-bold uppercase tracking-widest py-3" 
-                   isLoading={isLoading}
-                   disabled={!selectedTime || !customerName || !phoneNumber}
-                 >
-                   Confirm Booking
-                 </Button>
-               </form>
-            </Card>
-          </div>
+          <Card title="Booking form">
+            <form className="space-y-4" onSubmit={handleBooking}>
+              <Input label="Guest name" placeholder="John Doe" value={name} onChange={(e) => setName(e.target.value)} disabled={isLoading} />
+              <Input label="Phone number" placeholder="+1 234 567 8900" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={isLoading} />
+              {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
+              <Button type="submit" className="w-full sm:w-auto" isLoading={isLoading} disabled={available !== true}>
+                Confirm booking
+              </Button>
+            </form>
+          </Card>
         </div>
-      ) : (
-        <Card>
-          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="relative w-full max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-              <Input placeholder="Search records..." className="pl-10" />
-            </div>
-            <Button variant="outline" className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">
-               <Download size={16} />
-               Export CSV
-            </Button>
-          </div>
-          <Table headers={['Name', 'Phone', 'Date', 'Time', 'Status']}>
-            {bookingRecords.map((record, i) => (
-              <TableRow key={i}>
-                <TableCell className="font-bold text-slate-800">{record.name}</TableCell>
-                <TableCell>{record.phone}</TableCell>
-                <TableCell>{record.date}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1.5">
-                    <Clock size={12} className="text-slate-400" />
-                    {record.time}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                    record.status === 'Confirmed' ? 'bg-emerald-100 text-emerald-700' :
-                    record.status === 'Completed' ? 'bg-blue-100 text-blue-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {record.status === 'Confirmed' && <CheckCircle2 size={12} />}
-                    {record.status === 'Cancelled' && <XCircle size={12} />}
-                    {record.status}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </Table>
-        </Card>
-      )}
+      </div>
     </div>
   );
 };
