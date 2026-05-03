@@ -7,7 +7,7 @@ const BASE_URL = RAW_BASE_URL.replace(/\/$/, "");
 
 /**
  * Build request headers.
- * Public routes (login/signup) should not force logout redirects.
+ * Public routes (login/signup) should not force logout redirects. ok
  */
 function getHeaders(extraHeaders = {}, withAuth = true) {
   const headers = {
