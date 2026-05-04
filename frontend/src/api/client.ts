@@ -69,6 +69,7 @@ export interface ClientResponse {
   sheet_id: string;
   timezone: string;
   phone_number: string;
+  client_phone: string;
   setup_complete: boolean;
   business_name: string;
   working_hours: string;
@@ -82,6 +83,7 @@ export interface SetupPayload {
   sheet_id: string;
   timezone?: string;
   phone_number?: string | null;
+  client_phone?: string | null;
   business_name?: string | null;
   working_hours?: string | null;
   slot_duration?: number | null;

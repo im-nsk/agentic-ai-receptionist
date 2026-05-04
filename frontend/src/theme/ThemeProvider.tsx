@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from 'react';
 
 const STORAGE_KEY = 'aireceptionist_theme';
 
@@ -18,7 +18,7 @@ const ThemeContext = createContext<ThemeCtx | undefined>(undefined);
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Scheme>(resolveInitial);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.classList.toggle('dark', theme === 'dark');
     localStorage.setItem(STORAGE_KEY, theme);

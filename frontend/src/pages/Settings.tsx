@@ -18,7 +18,8 @@ export const Settings: React.FC = () => {
   const [calendarId, setCalendarId] = useState('');
   const [sheetId, setSheetId] = useState('');
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [aiPhoneNumber, setAiPhoneNumber] = useState('');
+  const [clientPhoneNumber, setClientPhoneNumber] = useState('');
   const [businessName, setBusinessName] = useState('');
   const [workingHours, setWorkingHours] = useState('');
   const [slotDuration, setSlotDuration] = useState(30);
@@ -36,7 +37,8 @@ export const Settings: React.FC = () => {
     setCalendarId((c.calendar_id || '').trim());
     setSheetId((c.sheet_id || '').trim());
     setTimezone(c.timezone || DEFAULT_TIMEZONE);
-    setPhoneNumber((c.phone_number || '').trim());
+    setAiPhoneNumber((c.phone_number || '').trim());
+    setClientPhoneNumber((c.client_phone || '').trim());
     setBusinessName((c.business_name || '').trim());
     setWorkingHours((c.working_hours || '').trim());
     setSlotDuration(typeof c.slot_duration === 'number' && c.slot_duration > 0 ? c.slot_duration : 30);
@@ -93,9 +95,14 @@ export const Settings: React.FC = () => {
       setError('Paste the full Google Sheet ID.');
       return;
     }
-    const phone = phoneNumber.trim();
-    if (!phone || phone.replace(/\D/g, '').length < 10) {
-      setError('Enter a reachable business phone (10+ digits) for call routing.');
+    const aiPhone = aiPhoneNumber.trim();
+    const ownerPhone = clientPhoneNumber.trim();
+    if (!aiPhone || aiPhone.replace(/\D/g, '').length < 10) {
+      setError('AI assistant number needs 10+ digits and must exactly match Twilio/VAPI inbound `to_number`.');
+      return;
+    }
+    if (!ownerPhone || ownerPhone.replace(/\D/g, '').length < 10) {
+      setError('Owner / personal mobile needs 10+ digits for notifications and CRM-style records.');
       return;
     }
     try {
@@ -104,7 +111,8 @@ export const Settings: React.FC = () => {
         calendar_id: cal,
         sheet_id: sheet,
         timezone,
-        phone_number: phone,
+        phone_number: aiPhone,
+        client_phone: ownerPhone,
         business_name: businessName.trim() || null,
         working_hours: workingHours.trim() || null,
         slot_duration: slotDuration,
@@ -174,14 +182,24 @@ export const Settings: React.FC = () => {
               ))}
             </Select>
             <Input
-              label="Business phone number"
+              label="AI assistant number (Twilio / VAPI DID)"
               placeholder="+1 ..."
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
+              value={aiPhoneNumber}
+              onChange={(e) => setAiPhoneNumber(e.target.value)}
               disabled={inputDisabled}
             />
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Incoming VAPI sessions match this business phone to your integrations.
+              Must exactly match webhook <code className="text-xs">to_number</code> so callers route to this workspace.
+            </p>
+            <Input
+              label="Owner personal / contact number"
+              placeholder="+1 ..."
+              value={clientPhoneNumber}
+              onChange={(e) => setClientPhoneNumber(e.target.value)}
+              disabled={inputDisabled}
+            />
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Your direct line kept separate from the AI business number shown to callers.
             </p>
           </div>
         </Card>

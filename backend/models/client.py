@@ -22,6 +22,7 @@ class Client(Base):
     email_verified = Column(Boolean, default=False, nullable=False)
 
     phone_number = Column(String, nullable=True, index=True)
+    client_phone = Column(String, nullable=True)
 
     calendar_id = Column(String, nullable=True)
     sheet_id = Column(String, nullable=True)

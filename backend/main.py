@@ -5,9 +5,10 @@ FastAPI app — auth (OTP), client setup, booking (web + VAPI).
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,11 +26,12 @@ from backend.services.auth_service import (
     hash_password,
     verify_password,
 )
-from backend.services.calendar_service import check_availability, create_event
-from backend.services.sms_service import send_sms
+from backend.services.booking_service import book_appointment_logic, check_availability_logic
 
 # ---------------- INIT ---------------- #
 app = FastAPI()
+
+VAPI_API_KEY = os.getenv("VAPI_API_KEY", "my-secret-123")
 
 Base.metadata.create_all(bind=engine)
 migrate_schema(engine)
@@ -65,37 +67,22 @@ def get_current_client_id(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def verify_vapi(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
+    """VAPI webhook auth — shared secret header."""
+    if not x_api_key or x_api_key != VAPI_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+
 def _client_slot_minutes(client: Client) -> int:
     v = client.slot_duration or 30
     return int(v) if v > 0 else 30
 
 
-def _digits_phone(p: Optional[str]) -> str:
-    if not p:
-        return ""
-    return "".join(ch for ch in p if ch.isdigit())
-
-
-def _phones_match(stored: Optional[str], incoming: str) -> bool:
-    a = _digits_phone(stored)
-    b = _digits_phone(incoming)
-    if len(b) < 10:
-        return False
-    if not a:
-        return False
-    if a == b:
-        return True
-    return a[-10:] == b[-10:]
-
-
-def _client_by_business_phone(db: Session, phone_number: str) -> Optional[Client]:
-    pn = phone_number.strip()
-    if not pn:
+def get_client_by_phone(db: Session, to_number: Optional[str]):
+    """Multi-tenant lookup: inbound AI / Twilio / VAPI `to_number` must match stored `phone_number`."""
+    if not to_number or not str(to_number).strip():
         return None
-    for row in db.query(Client).limit(5000):  # simple MVP routing
-        if row.phone_number and _phones_match(row.phone_number, pn):
-            return row
-    return None
+    return db.query(Client).filter(Client.phone_number == str(to_number).strip()).first()
 
 
 def _generate_otp_code() -> str:
@@ -124,25 +111,12 @@ class SetupRequest(BaseModel):
     sheet_id: str
     timezone: Optional[str] = None
     phone_number: Optional[str] = None
+    client_phone: Optional[str] = None
     business_name: Optional[str] = None
     working_hours: Optional[str] = None
     slot_duration: Optional[int] = Field(default=None, ge=15, le=480)
     services: Optional[List[str]] = None
     free_text: Optional[str] = None
-
-
-class VapiCheckRequest(BaseModel):
-    phone_number: str = Field(..., description="Business line / client booking number")
-    date: str
-    time: str
-
-
-class VapiBookRequest(BaseModel):
-    phone_number: str = Field(..., description="Business line / client booking number")
-    name: str = Field(..., min_length=2)
-    phone: str
-    date: str
-    time: str
 
 
 # ---------------- HEALTH ---------------- #
@@ -268,6 +242,7 @@ def get_client_data(
         "sheet_id": client.sheet_id or "",
         "timezone": client.timezone or "America/New_York",
         "phone_number": client.phone_number or "",
+        "client_phone": client.client_phone or "",
         "setup_complete": setup_ready,
         "business_name": client.business_name or "",
         "working_hours": client.working_hours or "",
@@ -296,6 +271,8 @@ def setup(
         client.timezone = data.timezone.strip() or client.timezone
     if data.phone_number is not None:
         client.phone_number = data.phone_number.strip() or None
+    if data.client_phone is not None:
+        client.client_phone = data.client_phone.strip() or None
     if data.business_name is not None:
         client.business_name = data.business_name.strip() or None
     if data.working_hours is not None:
@@ -313,49 +290,7 @@ def setup(
     return {"status": "saved"}
 
 
-# ---------------- AVAILABILITY / BOOK SHARED ---------------- #
-def _run_availability(client: Client, date: str, time: str) -> dict:
-    if not client.calendar_id:
-        return {"available": False, "message": "Client setup incomplete"}
-    duration = _client_slot_minutes(client)
-    ok = check_availability(
-        date,
-        time,
-        calendar_id=client.calendar_id,
-        timezone=client.timezone or "America/New_York",
-        duration_minutes=duration,
-    )
-    return {"available": ok, "message": "Available" if ok else "Slot not available"}
-
-
-def _run_book_background(client: Client, name: str, phone: str, date: str, time: str, background_tasks: BackgroundTasks) -> dict:
-    if not client.calendar_id or not client.sheet_id:
-        raise HTTPException(status_code=400, detail="Client setup incomplete")
-
-    duration = _client_slot_minutes(client)
-    ok = create_event(
-        name,
-        phone,
-        date,
-        time,
-        calendar_id=client.calendar_id,
-        sheet_id=client.sheet_id,
-        timezone=client.timezone or "America/New_York",
-        duration_minutes=duration,
-    )
-
-    if not ok:
-        return {"status": "failed", "message": "Could not create booking"}
-
-    background_tasks.add_task(
-        send_sms,
-        phone,
-        f"Hi {name}, your appointment is confirmed on {date} at {time}",
-    )
-
-    return {"status": "confirmed", "message": "Booking confirmed"}
-
-
+# ---------------- AVAILABILITY / BOOK (JWT) ---------------- #
 @app.post("/check-availability")
 def availability(
     req: BookingRequest,
@@ -366,7 +301,13 @@ def availability(
         client = db.query(Client).filter(Client.id == client_id).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
-        return _run_availability(client, req.date, req.time)
+        return check_availability_logic(
+            date=req.date,
+            time=req.time,
+            calendar_id=client.calendar_id,
+            timezone_str=client.timezone or "America/New_York",
+            duration_minutes=_client_slot_minutes(client),
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -385,8 +326,18 @@ def book_web(
         client = db.query(Client).filter(Client.id == client_id).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
-        result = _run_book_background(client, req.name, req.phone, req.date, req.time, background_tasks)
-        return result
+        return book_appointment_logic(
+            client_id=client.id,
+            name=req.name,
+            phone=req.phone,
+            date=req.date,
+            time=req.time,
+            calendar_id=client.calendar_id,
+            sheet_id=client.sheet_id,
+            timezone_str=client.timezone or "America/New_York",
+            duration_minutes=_client_slot_minutes(client),
+            background_tasks=background_tasks,
+        )
 
     except HTTPException:
         raise
@@ -395,29 +346,70 @@ def book_web(
         raise HTTPException(status_code=500, detail="Booking failed")
 
 
-# ---------------- VAPI (phone → client) ---------------- #
+def _vapi_str(payload: Dict[str, Any], key: str, label: Optional[str] = None) -> str:
+    raw = payload.get(key)
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        raise HTTPException(status_code=400, detail=f"Missing {(label or key)}")
+    return str(raw).strip()
+
+
+# ---------------- VAPI (x-api-key + to_number) ---------------- #
 @app.post("/vapi/check-availability")
-def vapi_check(payload: VapiCheckRequest, db: Session = Depends(get_db)):
-    client = _client_by_business_phone(db, payload.phone_number)
+def vapi_check(
+    payload: Dict[str, Any],
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_vapi),
+):
+    to_number_raw = payload.get("to_number")
+    to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
+    client = get_client_by_phone(db, to_number)
     if not client:
-        raise HTTPException(status_code=404, detail="Unknown business phone")
-    return _run_availability(client, payload.date, payload.time)
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    date = _vapi_str(payload, "date")
+    time = _vapi_str(payload, "time")
+
+    return check_availability_logic(
+        date=date,
+        time=time,
+        calendar_id=client.calendar_id,
+        timezone_str=client.timezone or "America/New_York",
+        duration_minutes=_client_slot_minutes(client),
+    )
 
 
 @app.post("/vapi/book")
-def vapi_book(payload: VapiBookRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    client = _client_by_business_phone(db, payload.phone_number)
-    if not client:
-        raise HTTPException(status_code=404, detail="Unknown business phone")
+def vapi_book(
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_vapi),
+):
     try:
-        return _run_book_background(
-            client,
-            payload.name,
-            payload.phone,
-            payload.date,
-            payload.time,
-            background_tasks,
+        to_number_raw = payload.get("to_number")
+        to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
+        client = get_client_by_phone(db, to_number)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        name = _vapi_str(payload, "name")
+        phone = _vapi_str(payload, "phone")
+        date = _vapi_str(payload, "date")
+        time = _vapi_str(payload, "time")
+
+        return book_appointment_logic(
+            client_id=client.id,
+            name=name,
+            phone=phone,
+            date=date,
+            time=time,
+            calendar_id=client.calendar_id,
+            sheet_id=client.sheet_id,
+            timezone_str=client.timezone or "America/New_York",
+            duration_minutes=_client_slot_minutes(client),
+            background_tasks=background_tasks,
         )
+
     except HTTPException:
         raise
     except Exception as e:
