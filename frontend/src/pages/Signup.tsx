@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signup as signupApi } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
@@ -9,13 +9,11 @@ import { Input } from '@/components/ui/Input';
 
 export const Signup: React.FC = () => {
   const navigate = useNavigate();
-  const timerRef = useRef<number | null>(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,15 +35,14 @@ export const Signup: React.FC = () => {
       return;
     }
 
+    setIsLoading(true);
     try {
-      setIsLoading(true);
-      const res = await signupApi({ name: n, email: em, password: pw });
-      if (res.status !== 'created') throw new Error('Signup failed');
-      setSuccess(true);
-      timerRef.current = window.setTimeout(() => navigate('/login', { replace: true }), 1000);
+      await signupApi({ name: n, email: em, password: pw });
+      navigate('/login', { replace: true });
     } catch (err) {
-      const msg = getApiErrorMessage(err).toLowerCase();
-      setError(msg.includes('exists') ? 'That email is already registered.' : getApiErrorMessage(err));
+      const raw = getApiErrorMessage(err);
+      const msg = raw.toLowerCase();
+      setError(msg.includes('exists') || msg.includes('already') ? 'That email is already registered.' : raw);
     } finally {
       setIsLoading(false);
     }
@@ -76,8 +73,7 @@ export const Signup: React.FC = () => {
               placeholder="At least 6 characters"
             />
             {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
-            {success && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">Account created.</p>}
-            <Button type="submit" className="w-full" isLoading={isLoading} disabled={success}>
+            <Button type="submit" className="w-full" isLoading={isLoading}>
               Create account
             </Button>
           </form>

@@ -35,7 +35,7 @@ export const Login: React.FC = () => {
     try {
       const response = await loginApi({ email: em, password: pw });
       if (!response.access_token) throw new Error('Invalid response');
-      await loginWithToken(response.access_token);
+      loginWithToken(response.access_token);
       navigate('/dashboard', { replace: true });
     } catch (error) {
       const msg = getApiErrorMessage(error).toLowerCase();

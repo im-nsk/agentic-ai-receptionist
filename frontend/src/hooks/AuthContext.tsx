@@ -8,7 +8,7 @@ interface AuthContextType {
   profileLoading: boolean;
   profileError: string | null;
   refreshProfile: () => Promise<void>;
-  loginWithToken: (token: string) => Promise<void>;
+  loginWithToken: (token: string) => void;
   logoutUser: () => void;
 }
 
@@ -46,9 +46,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fetchProfile();
   }, [fetchProfile]);
 
-  const loginWithToken = useCallback(async (token: string) => {
+  const loginWithToken = useCallback((token: string) => {
     setToken(token);
-    await fetchProfile();
+    void fetchProfile();
   }, [fetchProfile]);
 
   const logoutUser = useCallback(() => {

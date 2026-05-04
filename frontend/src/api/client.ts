@@ -1,11 +1,14 @@
 import axios from 'axios';
 import { getToken, isTokenExpired, logout } from '@/utils/auth';
 
-const RAW_BASE_URL = import.meta.env.VITE_API_URL || 'https://agentic-ai-receptionist.onrender.com';
-const BASE_URL = RAW_BASE_URL.replace(/\/$/, '');
+const envUrl = import.meta.env.VITE_API_URL;
+const BASE_URL =
+  (typeof envUrl === 'string' ? envUrl : '').replace(/\/$/, '') ||
+  (import.meta.env.DEV ? 'http://localhost:10000' : '');
 
 export const api = axios.create({
   baseURL: BASE_URL,
+  timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
   },
