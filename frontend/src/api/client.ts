@@ -32,7 +32,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const skipAuth = (err.config as { skipAuth?: boolean } | undefined)?.skipAuth === true;
+    if (err.response?.status === 401 && !skipAuth) {
       logout();
     }
 
@@ -44,6 +45,11 @@ export interface SignupPayload {
   name: string;
   email: string;
   password: string;
+}
+
+export interface VerifyOtpPayload {
+  email: string;
+  code: string;
 }
 
 export interface LoginPayload {
@@ -59,12 +65,28 @@ export interface ClientResponse {
   name: string;
   minutes_used: number;
   plan_limit: number;
+  calendar_id: string;
+  sheet_id: string;
+  timezone: string;
+  phone_number: string;
+  setup_complete: boolean;
+  business_name: string;
+  working_hours: string;
+  slot_duration: number;
+  services: string[];
+  free_text: string;
 }
 
 export interface SetupPayload {
   calendar_id: string;
   sheet_id: string;
   timezone?: string;
+  phone_number?: string | null;
+  business_name?: string | null;
+  working_hours?: string | null;
+  slot_duration?: number | null;
+  services?: string[] | null;
+  free_text?: string | null;
 }
 
 export interface AppointmentPayload {
@@ -82,10 +104,16 @@ export interface AvailabilityResponse {
 
 export interface BookResponse {
   status: string;
+  message?: string;
 }
 
 export async function signup(payload: SignupPayload) {
-  const { data } = await api.post<{ status: string }>('/signup', payload, { skipAuth: true });
+  const { data } = await api.post<{ status: string; email?: string }>('/signup', payload, { skipAuth: true });
+  return data;
+}
+
+export async function verifyOtp(payload: VerifyOtpPayload) {
+  const { data } = await api.post<LoginResponse>('/verify-otp', payload, { skipAuth: true });
   return data;
 }
 

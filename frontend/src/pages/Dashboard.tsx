@@ -108,8 +108,8 @@ export const Dashboard: React.FC = () => {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2" title="Booking trends" description="Last seven session days">
+      <div className="grid grid-cols-1 gap-6">
+        <Card title="Booking trends" description="Last seven session days">
           <div className="flex h-48 items-end gap-2 border-t border-slate-100 pt-6 dark:border-slate-800">
             {trends.map((count, i) => (
               <div key={`${dayLabels[i]}-${count}`} className="flex flex-1 flex-col items-center gap-2">
@@ -124,13 +124,6 @@ export const Dashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </Card>
-        <Card title="Data source">
-          <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
-            <li>Google Calendar handles events and availability.</li>
-            <li>Google Sheets keeps booking records.</li>
-            <li>Dashboard tiles show local booking actions.</li>
-          </ul>
         </Card>
       </div>
 

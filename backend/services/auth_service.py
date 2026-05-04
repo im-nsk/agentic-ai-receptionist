@@ -15,7 +15,6 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # 🔒 Hash password (FIXED for bcrypt limit)
 def hash_password(password: str):
     # bcrypt max = 72 bytes → normalize if longer
-    print("🔥 NEW HASH FUNCTION RUNNING")  # ADD THIS
     if len(password.encode("utf-8")) > 72:
         password = hashlib.sha256(password.encode()).hexdigest()
 

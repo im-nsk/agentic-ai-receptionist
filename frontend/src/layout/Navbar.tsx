@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { LogOut, Menu, Moon, Sun } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth } from '@/hooks/AuthContext';
-import { useTheme } from '@/hooks/useTheme';
+import { useTheme } from '@/theme/ThemeProvider';
 import { Button } from '@/components/ui/Button';
 
 const navItems = [

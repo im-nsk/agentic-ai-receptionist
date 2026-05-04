@@ -37,8 +37,10 @@ def parse_datetime(date, time, timezone):
 
 # ---------------- VALIDATIONS ---------------- #
 
-def is_valid_slot(dt):
-    return dt.minute in [0, 30]
+def is_valid_slot(dt, duration_minutes: int = 30):
+    duration_minutes = duration_minutes or 30
+    mins = dt.hour * 60 + dt.minute
+    return mins % duration_minutes == 0 and dt.second == 0
 
 
 def is_within_working_hours(dt):
@@ -47,7 +49,7 @@ def is_within_working_hours(dt):
 
 # ---------------- CHECK AVAILABILITY ---------------- #
 
-def check_availability(date, time, calendar_id, timezone):
+def check_availability(date, time, calendar_id, timezone, duration_minutes: int = 30):
 
     booking_dt = parse_datetime(date, time, timezone)
 
@@ -55,15 +57,17 @@ def check_availability(date, time, calendar_id, timezone):
     if not calendar_id:
         return False
 
+    duration_minutes = duration_minutes or 30
+
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
-    end_time = start_time + timedelta(minutes=30)
+    end_time = start_time + timedelta(minutes=duration_minutes)
 
     # ❌ Past
     if start_time <= datetime.now(ZoneInfo("UTC")):
         return False
 
-    # ❌ Invalid slot
-    if not is_valid_slot(booking_dt):
+    # ❌ Invalid slot boundaries
+    if not is_valid_slot(booking_dt, duration_minutes):
         return False
 
     # ❌ Outside working hours
@@ -81,18 +85,20 @@ def check_availability(date, time, calendar_id, timezone):
 
 # ---------------- CREATE EVENT ---------------- #
 
-def create_event(name, phone, date, time, calendar_id, sheet_id, timezone):
+def create_event(name, phone, date, time, calendar_id, sheet_id, timezone, duration_minutes: int = 30):
     try:
         if not calendar_id or not sheet_id:
             return False
 
         booking_dt = parse_datetime(date, time, timezone)
 
-        if not check_availability(date, time, calendar_id, timezone):
+        duration_minutes = duration_minutes or 30
+
+        if not check_availability(date, time, calendar_id, timezone, duration_minutes=duration_minutes):
             return False
 
         start_time = booking_dt
-        end_time = start_time + timedelta(minutes=30)
+        end_time = start_time + timedelta(minutes=duration_minutes)
 
         event = {
             'summary': f'Appointment with {name}',

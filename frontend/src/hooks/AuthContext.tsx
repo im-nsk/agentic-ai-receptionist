@@ -1,10 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { getClient, type ClientResponse } from '@/api/client';
+import { getClient } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { getToken, isTokenExpired, logout, setToken } from '@/utils/auth';
 
+interface ProfileSummary {
+  name: string;
+  minutes_used: number;
+  plan_limit: number;
+}
+
 interface AuthContextType {
-  profile: Pick<ClientResponse, 'name'> | null;
+  profile: ProfileSummary | null;
   profileLoading: boolean;
   profileError: string | null;
   refreshProfile: () => Promise<void>;
@@ -15,7 +21,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [profile, setProfile] = useState<Pick<ClientResponse, 'name'> | null>(null);
+  const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
 
@@ -33,7 +39,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       const client = await getClient();
-      setProfile({ name: client.name });
+      setProfile({
+        name: client.name,
+        minutes_used: client.minutes_used ?? 0,
+        plan_limit: client.plan_limit ?? 0,
+      });
     } catch (e) {
       setProfile(null);
       setProfileError(getApiErrorMessage(e));

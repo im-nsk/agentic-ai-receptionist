@@ -10,6 +10,7 @@ import { Dashboard } from '@/pages/Dashboard';
 import { Login } from '@/pages/Login';
 import { Settings } from '@/pages/Settings';
 import { Signup } from '@/pages/Signup';
+import { VerifyEmail } from '@/pages/VerifyEmail';
 
 function Spinner() {
   return (
@@ -86,6 +87,14 @@ export default function App() {
           element={
             <GuestShell>
               <Signup />
+            </GuestShell>
+          }
+        />
+        <Route
+          path="/verify-email"
+          element={
+            <GuestShell>
+              <VerifyEmail />
             </GuestShell>
           }
         />

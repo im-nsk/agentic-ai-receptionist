@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BookResponse, bookAppointment, checkAvailability } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { MonthCalendar } from '@/components/MonthCalendar';
@@ -23,6 +23,11 @@ export const Booking: React.FC = () => {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [message, setMessage] = useState<string>('');
   const [error, setError] = useState('');
+  const [bookingConfirmed, setBookingConfirmed] = useState(false);
+
+  useEffect(() => {
+    setBookingConfirmed(false);
+  }, [selectedDate]);
 
   const dateIso = toISODateLocal(selectedDate);
 
@@ -69,6 +74,7 @@ export const Booking: React.FC = () => {
     setIsLoading(true);
     setError('');
     setMessage('');
+    setBookingConfirmed(false);
     try {
       const res: BookResponse = await bookAppointment({
         client_id: clientId,
@@ -86,13 +92,15 @@ export const Booking: React.FC = () => {
         status: ok ? 'confirmed' : 'failed',
       });
       if (!ok) {
-        setError('Slot could not be confirmed.');
+        setError(res.message || 'Slot could not be confirmed.');
       } else {
         setName('');
         setPhone('');
         setSelectedTime(null);
         setAvailable(null);
-        setMessage('Appointment confirmed.');
+        const msg = res.message || 'Booking confirmed — SMS will go out shortly if SMS is configured.';
+        setMessage(msg);
+        setBookingConfirmed(true);
       }
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -109,6 +117,15 @@ export const Booking: React.FC = () => {
           <p className="text-slate-500 dark:text-slate-400">Schedule and confirm appointments instantly</p>
         </div>
       </div>
+
+      {bookingConfirmed && (
+        <div
+          role="status"
+          className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-950 shadow-sm dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-50"
+        >
+          ✅ {message}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <Card className="lg:col-span-5 xl:col-span-4" title="Calendar" description="Select booking day">
@@ -134,6 +151,7 @@ export const Booking: React.FC = () => {
                   key={slot}
                   type="button"
                   onClick={() => {
+                    setBookingConfirmed(false);
                     setSelectedTime(slot);
                     void checkSlot(slot);
                   }}

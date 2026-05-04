@@ -38,7 +38,7 @@ export const Signup: React.FC = () => {
     setIsLoading(true);
     try {
       await signupApi({ name: n, email: em, password: pw });
-      navigate('/login', { replace: true });
+      navigate('/verify-email', { replace: true, state: { email: em } });
     } catch (err) {
       const raw = getApiErrorMessage(err);
       const msg = raw.toLowerCase();
@@ -57,7 +57,7 @@ export const Signup: React.FC = () => {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">Create account</h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-            Schedule and confirm appointments instantly
+            After signing up you&apos;ll verify a one-time code (MVP prints to the backend console instead of email).
           </p>
         </div>
 
