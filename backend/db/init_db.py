@@ -1,5 +1,4 @@
-from backend.db.database import engine
-from backend.models.client import Client
+"""Database schema is managed manually outside the app."""
 
 def init_db():
-    Client.metadata.create_all(bind=engine)
+    return None

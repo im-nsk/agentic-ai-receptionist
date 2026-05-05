@@ -4,19 +4,18 @@ FastAPI app — auth (OTP), client setup, booking (web + VAPI).
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.db.database import Base, SessionLocal, engine
-from backend.db.migrate import migrate_schema
+from backend.db.database import SessionLocal
 from backend.models.booking import BookingRequest
 from backend.models.client import Client
 from backend.models.email_otp import EmailOTP
@@ -32,9 +31,6 @@ from backend.services.booking_service import book_appointment_logic, check_avail
 app = FastAPI()
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "my-secret-123")
-
-Base.metadata.create_all(bind=engine)
-migrate_schema(engine)
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
@@ -63,6 +59,13 @@ def get_current_client_id(authorization: str = Header(None)):
         token = authorization.split(" ")[1]
         payload = decode_token(token)
         return payload["client_id"]
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def _parse_client_uuid(client_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(client_id))
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -106,17 +109,42 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class SetupRequest(BaseModel):
+class SetupPayload(BaseModel):
+    phone_number: str
+    client_phone: Optional[str] = None
+
     calendar_id: str
     sheet_id: str
-    timezone: Optional[str] = None
-    phone_number: Optional[str] = None
-    client_phone: Optional[str] = None
-    business_name: Optional[str] = None
-    working_hours: Optional[str] = None
-    slot_duration: Optional[int] = Field(default=None, ge=15, le=480)
-    services: Optional[List[str]] = None
+    timezone: str
+
+    business_name: str
+    working_hours: dict
+    slot_duration: int = Field(..., ge=1)
+    services: List[Any]
     free_text: Optional[str] = None
+
+    @field_validator("phone_number", "calendar_id", "sheet_id", "timezone", "business_name")
+    @classmethod
+    def _required_non_empty(cls, value: str) -> str:
+        v = value.strip()
+        if not v:
+            raise ValueError("must not be empty")
+        return v
+
+    @field_validator("client_phone", "free_text")
+    @classmethod
+    def _optional_strip(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        v = value.strip()
+        return v or None
+
+    @field_validator("services")
+    @classmethod
+    def _services_must_be_list(cls, value: List[Any]) -> List[Any]:
+        if not isinstance(value, list):
+            raise ValueError("services must be a list")
+        return value
 
 
 # ---------------- HEALTH ---------------- #
@@ -140,7 +168,6 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
             name=data.name.strip(),
             email=email,
             password=hash_password(data.password),
-            email_verified=False,
         )
         db.add(client)
         db.flush()
@@ -184,11 +211,10 @@ def verify_otp(payload: VerifyOTPRequest, db: Session = Depends(get_db)):
         db.commit()
         raise HTTPException(status_code=404, detail="User not found")
 
-    client.email_verified = True
     db.delete(row)
     db.commit()
 
-    token = create_access_token({"client_id": client.id})
+    token = create_access_token({"client_id": str(client.id)})
 
     return {"access_token": token}
 
@@ -201,24 +227,12 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     if not client or not verify_password(data.password, client.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not bool(client.email_verified):
+    pending_otp = db.query(EmailOTP).filter(EmailOTP.email == data.email.strip().lower()).first()
+    if pending_otp:
         raise HTTPException(status_code=403, detail="Verify your email with the OTP we sent.")
 
-    token = create_access_token({"client_id": client.id})
+    token = create_access_token({"client_id": str(client.id)})
     return {"access_token": token}
-
-
-# ---------------- CLIENT ---------------- #
-def _services_list(raw: Optional[str]) -> List[str]:
-    if not raw:
-        return []
-    try:
-        v = json.loads(raw)
-        if isinstance(v, list):
-            return [str(x).strip() for x in v if str(x).strip()]
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return []
 
 
 @app.get("/client")
@@ -226,18 +240,16 @@ def get_client_data(
     client_id: str = Depends(get_current_client_id),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
 
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
     setup_ready = bool(client.calendar_id and client.sheet_id)
-    svc = _services_list(client.services_json)
-
     return {
         "name": client.name,
-        "minutes_used": client.minutes_used,
-        "plan_limit": client.plan_limit,
+        "minutes_used": 0,
+        "plan_limit": 1000,
         "calendar_id": client.calendar_id or "",
         "sheet_id": client.sheet_id or "",
         "timezone": client.timezone or "America/New_York",
@@ -245,9 +257,9 @@ def get_client_data(
         "client_phone": client.client_phone or "",
         "setup_complete": setup_ready,
         "business_name": client.business_name or "",
-        "working_hours": client.working_hours or "",
+        "working_hours": client.working_hours or {},
         "slot_duration": client.slot_duration or 30,
-        "services": svc,
+        "services": client.services or [],
         "free_text": client.free_text or "",
     }
 
@@ -255,39 +267,33 @@ def get_client_data(
 # ---------------- SETUP (UPSERT SAME ROW) ---------------- #
 @app.post("/setup")
 def setup(
-    data: SetupRequest,
+    payload: SetupPayload,
     client_id: str = Depends(get_current_client_id),
     db: Session = Depends(get_db),
 ):
-    client = db.query(Client).filter(Client.id == client_id).first()
+    client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
 
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    client.calendar_id = data.calendar_id.strip()
-    client.sheet_id = data.sheet_id.strip()
+    if not payload.phone_number:
+        raise HTTPException(status_code=422, detail="phone_number is required")
 
-    if data.timezone is not None:
-        client.timezone = data.timezone.strip() or client.timezone
-    if data.phone_number is not None:
-        client.phone_number = data.phone_number.strip() or None
-    if data.client_phone is not None:
-        client.client_phone = data.client_phone.strip() or None
-    if data.business_name is not None:
-        client.business_name = data.business_name.strip() or None
-    if data.working_hours is not None:
-        client.working_hours = data.working_hours.strip() or None
-    if data.slot_duration is not None:
-        client.slot_duration = data.slot_duration
-    if data.services is not None:
-        client.services_json = json.dumps([s.strip() for s in data.services if s.strip()]) if data.services else None
-    if data.free_text is not None:
-        client.free_text = data.free_text.strip() or None
+    client.phone_number = payload.phone_number
+    client.client_phone = payload.client_phone
+    client.calendar_id = payload.calendar_id
+    client.sheet_id = payload.sheet_id
+    client.timezone = payload.timezone
+    client.business_name = payload.business_name
+    client.working_hours = payload.working_hours
+    client.slot_duration = payload.slot_duration
+    client.services = payload.services
+    client.free_text = payload.free_text
 
     db.commit()
     db.refresh(client)
 
-    return {"status": "saved"}
+    return {"status": "setup_saved"}
 
 
 # ---------------- AVAILABILITY / BOOK (JWT) ---------------- #
@@ -298,7 +304,7 @@ def availability(
     db: Session = Depends(get_db),
 ):
     try:
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         return check_availability_logic(
@@ -323,7 +329,7 @@ def book_web(
     db: Session = Depends(get_db),
 ):
     try:
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         return book_appointment_logic(
@@ -365,6 +371,8 @@ def vapi_check(
     client = get_client_by_phone(db, to_number)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    calendar_id = client.calendar_id
+    timezone = client.timezone or "America/New_York"
 
     date = _vapi_str(payload, "date")
     time = _vapi_str(payload, "time")
@@ -372,8 +380,8 @@ def vapi_check(
     return check_availability_logic(
         date=date,
         time=time,
-        calendar_id=client.calendar_id,
-        timezone_str=client.timezone or "America/New_York",
+        calendar_id=calendar_id,
+        timezone_str=timezone,
         duration_minutes=_client_slot_minutes(client),
     )
 
@@ -391,6 +399,9 @@ def vapi_book(
         client = get_client_by_phone(db, to_number)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        calendar_id = client.calendar_id
+        sheet_id = client.sheet_id
+        timezone = client.timezone or "America/New_York"
 
         name = _vapi_str(payload, "name")
         phone = _vapi_str(payload, "phone")
@@ -403,9 +414,9 @@ def vapi_book(
             phone=phone,
             date=date,
             time=time,
-            calendar_id=client.calendar_id,
-            sheet_id=client.sheet_id,
-            timezone_str=client.timezone or "America/New_York",
+            calendar_id=calendar_id,
+            sheet_id=sheet_id,
+            timezone_str=timezone,
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
         )
