@@ -11,7 +11,7 @@ export const Table: React.FC<TableProps> = ({ headers, children, className }) =>
   return (
     <div
       className={cn(
-        'relative w-full overflow-auto rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/80',
+        'relative w-full overflow-x-auto overflow-y-visible rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/80',
         className
       )}
     >

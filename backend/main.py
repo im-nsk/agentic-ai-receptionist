@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from backend.db.database import SessionLocal, engine
@@ -29,8 +29,11 @@ from backend.services.booking_service import book_appointment_logic, check_avail
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheets_service import (
     create_provisioned_booking_sheet,
+    delete_booking_data_row,
     ensure_booking_sheet_headers,
+    get_data_row_cells,
     list_booking_rows_for_dashboard,
+    patch_booking_data_row,
 )
 
 # ---------------- INIT ---------------- #
@@ -180,6 +183,22 @@ class SetupPayload(BaseModel):
         if not isinstance(value, list):
             raise ValueError("services must be a list")
         return value
+
+
+class BookingPatchRequest(BaseModel):
+    date: Optional[str] = None
+    time: Optional[str] = None
+    status: Optional[str] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "BookingPatchRequest":
+        data = self.model_dump(exclude_unset=True)
+        if not data:
+            raise ValueError("At least one field is required")
+        return self
 
 
 # ---------------- HEALTH ---------------- #
@@ -426,7 +445,67 @@ def list_bookings(
         return []
 
 
-# ---------------- AVAILABILITY / BOOK (JWT) ---------------- #
+@app.patch("/bookings/{row_id}")
+def patch_booking_row_endpoint(
+    row_id: int,
+    payload: BookingPatchRequest,
+    client_id: str = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
+    """Update a booking row in the client's Google Sheet (1-based row_id; row 1 is headers)."""
+    if row_id < 2:
+        raise HTTPException(status_code=400, detail="Invalid row_id")
+    client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    sheet_id = (client.sheet_id or "").strip()
+    if not sheet_id:
+        raise HTTPException(status_code=400, detail="No booking sheet configured")
+    allowed = {"date", "time", "status", "name", "phone", "notes"}
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    try:
+        patch_booking_data_row(sheet_id, row_id, **updates)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Booking row not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        print("PATCH BOOKING:", repr(e))
+        raise HTTPException(status_code=500, detail="Could not update booking") from e
+    return {"status": "updated"}
+
+
+@app.delete("/bookings/{row_id}")
+def delete_booking_row_endpoint(
+    row_id: int,
+    client_id: str = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
+    """Delete a booking row from the client's Google Sheet."""
+    if row_id < 2:
+        raise HTTPException(status_code=400, detail="Invalid row_id")
+    client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    sheet_id = (client.sheet_id or "").strip()
+    if not sheet_id:
+        raise HTTPException(status_code=400, detail="No booking sheet configured")
+    try:
+        get_data_row_cells(sheet_id, row_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Booking row not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        delete_booking_data_row(sheet_id, row_id)
+    except Exception as e:
+        print("DELETE BOOKING:", repr(e))
+        raise HTTPException(status_code=500, detail="Could not delete booking") from e
+    return {"status": "deleted"}
+
+
 @app.post("/check-availability")
 def availability(
     req: BookingRequest,
@@ -481,6 +560,17 @@ def book_web(
     except Exception as e:
         print("Booking Error:", repr(e))
         raise HTTPException(status_code=500, detail="Booking failed")
+
+
+@app.post("/book")
+def book_create(
+    req: BookingRequest,
+    background_tasks: BackgroundTasks,
+    client_id: str = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
+    """Same as POST /book-appointment: creates calendar event and appends to Google Sheet."""
+    return book_web(req, background_tasks, client_id, db)
 
 
 def _vapi_str(payload: Dict[str, Any], key: str, label: Optional[str] = None) -> str:

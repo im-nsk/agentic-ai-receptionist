@@ -91,6 +91,7 @@ export interface SetupPayload {
 }
 
 export interface BookingRowResponse {
+  row_id: number;
   id: string;
   name: string;
   phone: string;
@@ -99,6 +100,15 @@ export interface BookingRowResponse {
   status: string;
   created_at: string | null;
   source?: string;
+  notes?: string;
+}
+
+export interface BookingPatchPayload {
+  date?: string;
+  time?: string;
+  status?: string;
+  name?: string;
+  phone?: string;
   notes?: string;
 }
 
@@ -175,12 +185,22 @@ export async function getBookings() {
   return data;
 }
 
+export async function patchBooking(rowId: number, payload: BookingPatchPayload) {
+  const { data } = await api.patch<{ status: string }>(`/bookings/${rowId}`, payload);
+  return data;
+}
+
+export async function deleteBooking(rowId: number) {
+  const { data } = await api.delete<{ status: string }>(`/bookings/${rowId}`);
+  return data;
+}
+
 export async function checkAvailability(payload: AppointmentPayload) {
   const { data } = await api.post<AvailabilityResponse>('/check-availability', payload);
   return data;
 }
 
 export async function bookAppointment(payload: AppointmentPayload) {
-  const { data } = await api.post<BookResponse>('/book-appointment', payload);
+  const { data } = await api.post<BookResponse>('/book', payload);
   return data;
 }

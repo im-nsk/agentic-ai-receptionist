@@ -180,15 +180,18 @@ def list_booking_rows_for_dashboard(sheet_id: str, limit: int = 500) -> List[Dic
         if len(rows) < 2:
             return []
     out: List[Dict[str, Any]] = []
-    for r in rows[1:]:
+    for i in range(1, len(rows)):
+        row_idx = i + 1
+        r = rows[i]
         if not r or not any(str(c).strip() for c in r):
             continue
-        cells = [str(r[i]).strip() if i < len(r) and r[i] is not None else "" for i in range(_N_COL)]
+        cells = [str(r[j]).strip() if j < len(r) and r[j] is not None else "" for j in range(_N_COL)]
         bid, nm, ph, dt, tm, st, src, nts, created = cells
         if not bid and not nm:
             continue
         out.append(
             {
+                "row_id": row_idx,
                 "id": bid or str(uuid.uuid4()),
                 "name": nm,
                 "phone": ph,
@@ -202,3 +205,59 @@ def list_booking_rows_for_dashboard(sheet_id: str, limit: int = 500) -> List[Dic
         )
     out.reverse()
     return out[:limit]
+
+
+def _data_row_range_a1(row_id: int) -> str:
+    if row_id < 2:
+        raise ValueError("Row 1 is reserved for headers")
+    end_col = chr(ord("A") + _N_COL - 1)
+    return f"A{row_id}:{end_col}{row_id}"
+
+
+def get_data_row_cells(sheet_id: str, row_id: int) -> List[str]:
+    ensure_booking_sheet_headers(sheet_id)
+    if row_id < 2:
+        raise ValueError("Invalid row_id")
+    ws = get_sheet(sheet_id)
+    vals = ws.row_values(row_id)
+    if not vals or not any(str(x).strip() for x in vals):
+        raise LookupError("empty_row")
+    return [str(vals[j]).strip() if j < len(vals) and vals[j] is not None else "" for j in range(_N_COL)]
+
+
+def patch_booking_data_row(
+    sheet_id: str,
+    row_id: int,
+    *,
+    date: Optional[str] = None,
+    time: Optional[str] = None,
+    status: Optional[str] = None,
+    name: Optional[str] = None,
+    phone: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> None:
+    cells = get_data_row_cells(sheet_id, row_id)
+    bid, nm, ph, dt, tm, st, src, nts, created = cells
+    if date is not None:
+        dt = date.strip()
+    if time is not None:
+        tm = time.strip()
+    if status is not None:
+        st = status.strip()
+    if name is not None:
+        nm = name.strip()
+    if phone is not None:
+        ph = phone.strip()
+    if notes is not None:
+        nts = notes.strip()
+    new_row = [bid, nm, ph, dt, tm, st, src, nts, created]
+    ws = get_sheet(sheet_id)
+    ws.update(_data_row_range_a1(row_id), [new_row], value_input_option="RAW")
+
+
+def delete_booking_data_row(sheet_id: str, row_id: int) -> None:
+    ensure_booking_sheet_headers(sheet_id)
+    if row_id < 2:
+        raise ValueError("Invalid row_id")
+    ws = get_sheet(sheet_id)
+    ws.delete_rows(row_id)
