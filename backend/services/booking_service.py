@@ -1,13 +1,11 @@
 """Shared booking + availability logic for web (/book-appointment) and VAPI."""
 
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.models.booking_record import BookingRecord
 from backend.services.calendar_service import check_availability, create_event
 from backend.services.sms_service import send_sms
 
@@ -46,6 +44,8 @@ def book_appointment_logic(
     duration_minutes: int,
     background_tasks: BackgroundTasks,
     db: Session,
+    source: str = "web",
+    notes: str = "",
 ) -> dict:
     if not calendar_id or not sheet_id:
         raise HTTPException(status_code=400, detail="Client setup incomplete")
@@ -60,23 +60,12 @@ def book_appointment_logic(
         sheet_id=sheet_id,
         timezone=timezone_str,
         duration_minutes=duration_minutes,
+        source=source,
+        notes=notes,
     )
 
     if not ok:
         return {"status": "failed", "message": "Could not create booking"}
-
-    db.add(
-        BookingRecord(
-            client_id=client_id,
-            name=name,
-            phone=phone,
-            date=date,
-            time=time,
-            status="confirmed",
-            created_at=datetime.utcnow(),
-        )
-    )
-    db.commit()
 
     background_tasks.add_task(
         send_sms,

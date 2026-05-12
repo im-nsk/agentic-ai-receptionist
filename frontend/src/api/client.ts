@@ -80,7 +80,7 @@ export interface ClientResponse {
 
 export interface SetupPayload {
   calendar_id: string;
-  sheet_id: string;
+  sheet_id?: string | null;
   timezone: string;
   client_phone?: string | null;
   business_name?: string | null;
@@ -98,6 +98,8 @@ export interface BookingRowResponse {
   time: string;
   status: string;
   created_at: string | null;
+  source?: string;
+  notes?: string;
 }
 
 export interface AppointmentPayload {

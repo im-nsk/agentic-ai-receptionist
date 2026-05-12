@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -85,7 +86,18 @@ def check_availability(date, time, calendar_id, timezone, duration_minutes: int 
 
 # ---------------- CREATE EVENT ---------------- #
 
-def create_event(name, phone, date, time, calendar_id, sheet_id, timezone, duration_minutes: int = 30):
+def create_event(
+    name,
+    phone,
+    date,
+    time,
+    calendar_id,
+    sheet_id,
+    timezone,
+    duration_minutes: int = 30,
+    source: str = "web",
+    notes: str = "",
+):
     try:
         if not calendar_id or not sheet_id:
             return False
@@ -118,13 +130,17 @@ def create_event(name, phone, date, time, calendar_id, sheet_id, timezone, durat
             body=event
         ).execute()
 
-        # Save to sheet
+        booking_id = str(uuid.uuid4())
         save_to_sheet(
-            name,
-            phone,
-            start_time.strftime("%Y-%m-%d"),
-            start_time.strftime("%H:%M"),
-            sheet_id=sheet_id
+            booking_id=booking_id,
+            name=name,
+            phone=phone,
+            date=start_time.strftime("%Y-%m-%d"),
+            time=start_time.strftime("%H:%M"),
+            sheet_id=sheet_id,
+            status="confirmed",
+            source=source,
+            notes=notes or "",
         )
 
         return True

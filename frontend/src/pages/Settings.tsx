@@ -37,7 +37,7 @@ export const Settings: React.FC = () => {
   const [loadErr, setLoadErr] = useState('');
 
   const [calendarId, setCalendarId] = useState('');
-  const [sheetId, setSheetId] = useState('');
+  const [linkedSheetId, setLinkedSheetId] = useState('');
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
   const [clientPhoneNumber, setClientPhoneNumber] = useState('');
   const [businessName, setBusinessName] = useState('');
@@ -55,7 +55,7 @@ export const Settings: React.FC = () => {
 
   const applyClient = useCallback((c: ClientResponse) => {
     setCalendarId((c.calendar_id || '').trim());
-    setSheetId((c.sheet_id || '').trim());
+    setLinkedSheetId((c.sheet_id || '').trim());
     setTimezone((c.timezone || '').trim() || DEFAULT_TIMEZONE);
     setClientPhoneNumber((c.client_phone || '').trim());
     setBusinessName((c.business_name || '').trim());
@@ -101,19 +101,14 @@ export const Settings: React.FC = () => {
     setError('');
     setMessage('');
     const cal = calendarId.trim();
-    const sheet = sheetId.trim();
     const tz = timezone.trim();
 
-    if (!cal || !sheet || !tz) {
-      setError('Calendar ID, Sheet ID, and timezone are required.');
+    if (!cal || !tz) {
+      setError('Calendar ID and timezone are required.');
       return;
     }
     if (!cal.includes('@')) {
       setError('Calendar ID must look like an email.');
-      return;
-    }
-    if (sheet.length < 20) {
-      setError('Paste the full Google Sheet ID.');
       return;
     }
     const ownerPhone = clientPhoneNumber.trim();
@@ -125,7 +120,6 @@ export const Settings: React.FC = () => {
       setSaving(true);
       await postSetup({
         calendar_id: cal,
-        sheet_id: sheet,
         timezone: tz,
         client_phone: ownerPhone,
         business_name: businessName.trim() || null,
@@ -176,9 +170,9 @@ export const Settings: React.FC = () => {
         <Card className="border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white shadow-sm dark:border-emerald-900/50 dark:from-emerald-950/40 dark:to-slate-950">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-base font-semibold text-emerald-950 dark:text-emerald-50">Connected</p>
+              <p className="text-base font-semibold text-emerald-950 dark:text-emerald-50">Google Calendar and Booking Sheet connected</p>
               <p className="mt-1 text-sm text-emerald-900/90 dark:text-emerald-100/90">
-                Calendar and Sheet are configured. Your assistant uses these integrations for availability and booking logs.
+                Availability uses your calendar; bookings are logged to your Google Sheet. AI phone numbers are managed in the backend.
               </p>
             </div>
             <Button type="button" variant="outline" size="sm" className="shrink-0 self-start sm:self-center" onClick={() => setEditing(true)}>
@@ -198,7 +192,10 @@ export const Settings: React.FC = () => {
             </Card>
           )}
 
-          <Card title="Integrations" description="Google Calendar and Sheets. AI phone numbers are configured on the server (Twilio / VAPI).">
+          <Card
+            title="Integrations"
+            description="Google Calendar for availability. A booking spreadsheet is created for you automatically (or use an existing linked sheet from a prior setup)."
+          >
             <div className="space-y-5 pt-2">
               <Input
                 label="Google Calendar ID"
@@ -208,14 +205,25 @@ export const Settings: React.FC = () => {
                 disabled={inputDisabled}
                 required
               />
-              <Input
-                label="Google Sheet ID"
-                value={sheetId}
-                onChange={(e) => setSheetId(e.target.value)}
-                placeholder="ID between spreadsheets/d/ and /edit"
-                disabled={inputDisabled}
-                required
-              />
+              {linkedSheetId ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900/50">
+                  <p className="font-medium text-slate-800 dark:text-slate-100">Booking spreadsheet</p>
+                  <p className="mt-1 break-all text-slate-600 dark:text-slate-400">
+                    <a
+                      href={`https://docs.google.com/spreadsheets/d/${linkedSheetId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-500 dark:text-blue-400"
+                    >
+                      Open in Google Sheets
+                    </a>
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600 dark:text-slate-400">
+                  After you save, we&apos;ll create a Google Sheet with the correct columns and freeze the header row.
+                </p>
+              )}
               <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled} required>
                 {COMMON_TIMEZONES.map((tz) => (
                   <option key={tz} value={tz}>
@@ -301,7 +309,7 @@ export const Settings: React.FC = () => {
 
           <Card title="About your data">
             <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
-              <li>Calendar holds real-time availability; the sheet is your booking audit trail.</li>
+              <li>Your booking log lives in Google Sheets (created automatically on first save). Headers stay consistent; you can edit data rows safely.</li>
               <li>Dashboard metrics are read from the server, not your browser.</li>
             </ul>
           </Card>
