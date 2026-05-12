@@ -1,29 +1,63 @@
-import React, { useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { verifyOtp } from '@/api/client';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { resendSignupOtp, verifyOtp } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/AuthContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 
+const PENDING_EMAIL_KEY = 'aireceptionist_pending_verification_email';
+
 export const VerifyEmail: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const email =
-    typeof (location.state as { email?: string } | null)?.email === 'string'
-      ? (location.state as { email: string }).email.trim().toLowerCase()
-      : '';
+  const [searchParams] = useSearchParams();
+  const { loginWithToken } = useAuth();
+
+  const locState = location.state as { email?: string; freshSignup?: boolean } | null;
+
+  const email = useMemo(() => {
+    const fromState = typeof locState?.email === 'string' ? locState.email.trim().toLowerCase() : '';
+    const fromQs = searchParams.get('email')?.trim().toLowerCase() || '';
+    const fromStore = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(PENDING_EMAIL_KEY)) || '';
+    return fromState || fromQs || fromStore.trim().toLowerCase();
+  }, [locState?.email, searchParams]);
+
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const { loginWithToken } = useAuth();
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMsg, setResendMsg] = useState('');
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!email) return;
+    sessionStorage.setItem(PENDING_EMAIL_KEY, email);
+  }, [email]);
+
+  useEffect(() => {
+    if (!email) return;
+    if (locState?.freshSignup) {
+      setCooldownUntil(Date.now() + 30_000);
+      navigate(`/verify-email?email=${encodeURIComponent(email)}`, { replace: true, state: { email } });
+    }
+  }, [email, locState?.freshSignup, navigate]);
 
   useEffect(() => {
     if (!email) {
       navigate('/signup', { replace: true });
     }
   }, [email, navigate]);
+
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    const t = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [cooldownUntil]);
+
+  const coolLeft = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +71,7 @@ export const VerifyEmail: React.FC = () => {
     try {
       const res = await verifyOtp({ email, code: otp });
       if (!res.access_token) throw new Error('Invalid response');
+      sessionStorage.removeItem(PENDING_EMAIL_KEY);
       loginWithToken(res.access_token);
       navigate('/dashboard', { replace: true });
     } catch (err) {
@@ -46,6 +81,22 @@ export const VerifyEmail: React.FC = () => {
     }
   };
 
+  const handleResend = useCallback(async () => {
+    if (!email || coolLeft > 0 || resendLoading) return;
+    setResendMsg('');
+    setError('');
+    setResendLoading(true);
+    try {
+      await resendSignupOtp({ email });
+      setResendMsg('A new code was sent. Check your inbox.');
+      setCooldownUntil(Date.now() + 30_000);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setResendLoading(false);
+    }
+  }, [email, coolLeft, resendLoading]);
+
   if (!email) return null;
 
   return (
@@ -54,11 +105,9 @@ export const VerifyEmail: React.FC = () => {
         <div className="text-center">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">Verify your email</h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-            Enter the OTP sent to <span className="font-medium text-slate-900 dark:text-slate-100">{email}</span>
+            Enter the code sent to <span className="font-medium text-slate-900 dark:text-slate-100">{email}</span>
           </p>
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">
-            MVP: check the backend console for your code if mail is not configured.
-          </p>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">Codes expire in 5 minutes.</p>
         </div>
 
         <Card>
@@ -79,10 +128,25 @@ export const VerifyEmail: React.FC = () => {
               />
             </div>
             {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
+            {resendMsg && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{resendMsg}</p>}
             <Button type="submit" className="w-full" isLoading={isLoading}>
               Verify and continue
             </Button>
           </form>
+
+          <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={resendLoading || coolLeft > 0}
+              isLoading={resendLoading}
+              onClick={() => void handleResend()}
+            >
+              {coolLeft > 0 ? `Resend code (${coolLeft}s)` : 'Resend code'}
+            </Button>
+          </div>
+
           <p className="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
             Wrong email?{' '}
             <Link to="/signup" className="font-medium text-blue-600 hover:text-blue-500">

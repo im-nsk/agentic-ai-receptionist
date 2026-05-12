@@ -123,6 +123,31 @@ export async function signup(payload: SignupPayload) {
   return data;
 }
 
+export interface EmailPayload {
+  email: string;
+}
+
+export interface ResetPasswordPayload {
+  email: string;
+  code: string;
+  new_password: string;
+}
+
+export async function resendSignupOtp(payload: EmailPayload) {
+  const { data } = await api.post<{ status: string }>('/resend-otp', payload, { skipAuth: true });
+  return data;
+}
+
+export async function forgotPassword(payload: EmailPayload) {
+  const { data } = await api.post<{ status: string }>('/forgot-password', payload, { skipAuth: true });
+  return data;
+}
+
+export async function resetPassword(payload: ResetPasswordPayload) {
+  const { data } = await api.post<{ status: string }>('/reset-password', payload, { skipAuth: true });
+  return data;
+}
+
 export async function verifyOtp(payload: VerifyOtpPayload) {
   const { data } = await api.post<LoginResponse>('/verify-otp', payload, { skipAuth: true });
   return data;

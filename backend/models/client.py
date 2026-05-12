@@ -34,5 +34,8 @@ class Client(Base):
     otp_expiry = Column(DateTime)
     is_verified = Column(Boolean, nullable=False, default=False)
 
+    password_reset_otp = Column(Text)
+    password_reset_otp_expiry = Column(DateTime)
+
     def __repr__(self):
         return f"<Client {self.email}>"
