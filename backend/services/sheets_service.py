@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -123,10 +122,11 @@ def create_provisioned_booking_sheet(title: str) -> str:
     """
     Create a new spreadsheet owned by the service account, write headers, freeze + soft-protect row 1.
     Returns spreadsheet ID (for clients.sheet_id).
+
+    Workbook title is fixed for a consistent tenant experience; ``title`` is kept for API compatibility.
     """
-    safe = re.sub(r'[\\/:*?"<>|]+', "-", title).strip() or "Bookings"
-    safe = safe[:90]
-    spreadsheet = _client.create(f"{safe} — Bookings")
+    _ = title  # unused; provisioning uses a single branded workbook name
+    spreadsheet = _client.create("AI Receptionist Booking Sheet")
     ws = spreadsheet.sheet1
     rng = _header_range_a1()
     ws.update(rng, [BOOKING_HEADERS], value_input_option="RAW")
