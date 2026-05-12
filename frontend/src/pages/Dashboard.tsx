@@ -45,40 +45,48 @@ export const Dashboard: React.FC = () => {
   const [analyticsOk, setAnalyticsOk] = useState(true);
   const [setupComplete, setSetupComplete] = useState(true);
   const [loading, setLoading] = useState(true);
+  /** True during background reload (keeps metrics visible; avoids full-page skeleton flash). */
+  const [refreshing, setRefreshing] = useState(false);
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [openMenuRow, setOpenMenuRow] = useState<number | null>(null);
   const [rescheduleRowId, setRescheduleRowId] = useState<number | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduleTime, setRescheduleTime] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const settled = await Promise.allSettled([getBookings(), getClient(), getSheetAnalytics()]);
+  const load = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent === true;
+      if (silent) setRefreshing(true);
+      else setLoading(true);
+      const settled = await Promise.allSettled([getBookings(), getClient(), getSheetAnalytics()]);
 
-    if (settled[0].status === 'fulfilled') {
-      setBookings(settled[0].value);
-    } else {
-      setBookings([]);
-      toast.error(getApiErrorMessage(settled[0].reason));
-    }
+      if (settled[0].status === 'fulfilled') {
+        setBookings(settled[0].value);
+      } else {
+        setBookings([]);
+        toast.error(getApiErrorMessage(settled[0].reason));
+      }
 
-    if (settled[1].status === 'fulfilled') {
-      setSetupComplete(Boolean(settled[1].value.setup_complete));
-    } else {
-      toast.error(getApiErrorMessage(settled[1].reason));
-    }
+      if (settled[1].status === 'fulfilled') {
+        setSetupComplete(Boolean(settled[1].value.setup_complete));
+      } else {
+        toast.error(getApiErrorMessage(settled[1].reason));
+      }
 
-    if (settled[2].status === 'fulfilled') {
-      setAnalytics(settled[2].value);
-      setAnalyticsOk(true);
-    } else {
-      setAnalytics(null);
-      setAnalyticsOk(false);
-      toast.error(getApiErrorMessage(settled[2].reason));
-    }
+      if (settled[2].status === 'fulfilled') {
+        setAnalytics(settled[2].value);
+        setAnalyticsOk(true);
+      } else {
+        setAnalytics(null);
+        setAnalyticsOk(false);
+        toast.error(getApiErrorMessage(settled[2].reason));
+      }
 
-    setLoading(false);
-  }, [toast]);
+      if (silent) setRefreshing(false);
+      else setLoading(false);
+    },
+    [toast]
+  );
 
   useEffect(() => {
     void load();
@@ -120,7 +128,7 @@ export const Dashboard: React.FC = () => {
       await patchBooking(rescheduleRowId, { date: d, time: t });
       setRescheduleRowId(null);
       toast.success('Booking updated in your sheet.');
-      await load();
+      await load({ silent: true });
     } catch (e) {
       toast.error(getApiErrorMessage(e));
     } finally {
@@ -135,7 +143,7 @@ export const Dashboard: React.FC = () => {
     try {
       await patchBooking(rowId, { status: 'cancelled' });
       toast.success('Booking marked cancelled in your sheet.');
-      await load();
+      await load({ silent: true });
     } catch (e) {
       toast.error(getApiErrorMessage(e));
     } finally {
@@ -151,7 +159,7 @@ export const Dashboard: React.FC = () => {
       await deleteBooking(rowId);
       if (rescheduleRowId === rowId) setRescheduleRowId(null);
       toast.success('Row removed from your sheet.');
-      await load();
+      await load({ silent: true });
     } catch (e) {
       toast.error(getApiErrorMessage(e));
     } finally {
@@ -174,9 +182,9 @@ export const Dashboard: React.FC = () => {
           type="button"
           variant="outline"
           className="shrink-0 self-start sm:self-auto"
-          onClick={() => void load()}
-          disabled={loading}
-          isLoading={loading}
+          onClick={() => void load({ silent: true })}
+          disabled={loading || refreshing}
+          isLoading={refreshing}
         >
           Refresh
         </Button>
@@ -337,8 +345,16 @@ export const Dashboard: React.FC = () => {
               <p className="max-w-md text-sm leading-relaxed text-slate-600 dark:text-slate-400">{emptyMessage}</p>
             </div>
           ) : (
-            <>
-              <Table headers={['Guest', 'When', 'Phone', 'Outcome', 'Actions']}>
+            <div className="relative isolate">
+              {openMenuRow !== null && (
+                <button
+                  type="button"
+                  className="fixed inset-0 z-[100] cursor-default bg-slate-900/10 dark:bg-black/30"
+                  aria-label="Close menu"
+                  onClick={() => setOpenMenuRow(null)}
+                />
+              )}
+              <Table className="relative z-[120]" headers={['Guest', 'When', 'Phone', 'Outcome', 'Actions']}>
                 {recent.map((row) => (
                   <TableRow key={`${row.row_id}-${row.id}`}>
                     <TableCell className="font-medium text-slate-900 dark:text-slate-100">{row.name}</TableCell>
@@ -360,7 +376,7 @@ export const Dashboard: React.FC = () => {
                         {row.status}
                       </span>
                     </TableCell>
-                    <TableCell className="relative w-44 min-w-[8rem]">
+                    <TableCell className="relative z-[120] w-44 min-w-[8rem]">
                       <button
                         type="button"
                         disabled={rowBusy === row.row_id}
@@ -371,7 +387,7 @@ export const Dashboard: React.FC = () => {
                         {rowBusy === row.row_id ? '…' : 'Actions'}
                       </button>
                       {openMenuRow === row.row_id && (
-                        <div className="absolute bottom-full right-0 z-[120] mb-1 min-w-[10rem] rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900 sm:bottom-auto sm:top-full sm:mb-0 sm:mt-1">
+                        <div className="absolute bottom-full right-0 z-[130] mb-1 min-w-[10rem] rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900 sm:bottom-auto sm:top-full sm:mb-0 sm:mt-1">
                           <button
                             type="button"
                             className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
@@ -399,15 +415,7 @@ export const Dashboard: React.FC = () => {
                   </TableRow>
                 ))}
               </Table>
-              {openMenuRow !== null && (
-                <button
-                  type="button"
-                  className="fixed inset-0 z-[100] cursor-default bg-slate-900/10 dark:bg-black/30"
-                  aria-label="Close menu"
-                  onClick={() => setOpenMenuRow(null)}
-                />
-              )}
-            </>
+            </div>
           )}
         </Card>
       </section>
