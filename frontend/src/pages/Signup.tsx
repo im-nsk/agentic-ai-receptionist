@@ -57,7 +57,7 @@ export const Signup: React.FC = () => {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">Create account</h1>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-            After signing up you&apos;ll verify a one-time code (MVP prints to the backend console instead of email).
+            We&apos;ll email you a one-time code to verify your address (if email is not configured, the server logs the code in development).
           </p>
         </div>
 

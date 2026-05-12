@@ -11,6 +11,27 @@ function servicesToLines(services: string[]): string {
   return services.length ? services.join('\n') : '';
 }
 
+function workingHoursToSummary(wh: ClientResponse['working_hours']): string {
+  if (wh == null || wh === '') return '';
+  if (typeof wh === 'string') return wh.trim();
+  if (typeof wh === 'object' && !Array.isArray(wh)) {
+    const s = (wh as { summary?: unknown }).summary;
+    if (typeof s === 'string') return s.trim();
+    try {
+      return JSON.stringify(wh);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+function summaryToWorkingHoursPayload(summary: string): Record<string, unknown> {
+  const t = summary.trim();
+  if (!t) return {};
+  return { summary: t };
+}
+
 export const Settings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
@@ -18,10 +39,9 @@ export const Settings: React.FC = () => {
   const [calendarId, setCalendarId] = useState('');
   const [sheetId, setSheetId] = useState('');
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
-  const [aiPhoneNumber, setAiPhoneNumber] = useState('');
   const [clientPhoneNumber, setClientPhoneNumber] = useState('');
   const [businessName, setBusinessName] = useState('');
-  const [workingHours, setWorkingHours] = useState('');
+  const [workingHoursSummary, setWorkingHoursSummary] = useState('');
   const [slotDuration, setSlotDuration] = useState(30);
   const [servicesText, setServicesText] = useState('');
   const [freeText, setFreeText] = useState('');
@@ -36,11 +56,10 @@ export const Settings: React.FC = () => {
   const applyClient = useCallback((c: ClientResponse) => {
     setCalendarId((c.calendar_id || '').trim());
     setSheetId((c.sheet_id || '').trim());
-    setTimezone(c.timezone || DEFAULT_TIMEZONE);
-    setAiPhoneNumber((c.phone_number || '').trim());
+    setTimezone((c.timezone || '').trim() || DEFAULT_TIMEZONE);
     setClientPhoneNumber((c.client_phone || '').trim());
     setBusinessName((c.business_name || '').trim());
-    setWorkingHours((c.working_hours || '').trim());
+    setWorkingHoursSummary(workingHoursToSummary(c.working_hours));
     setSlotDuration(typeof c.slot_duration === 'number' && c.slot_duration > 0 ? c.slot_duration : 30);
     setServicesText(servicesToLines(c.services ?? []));
     setFreeText((c.free_text || '').trim());
@@ -82,9 +101,10 @@ export const Settings: React.FC = () => {
     setMessage('');
     const cal = calendarId.trim();
     const sheet = sheetId.trim();
+    const tz = timezone.trim();
 
-    if (!cal || !sheet) {
-      setError('Calendar ID and Sheet ID are required.');
+    if (!cal || !sheet || !tz) {
+      setError('Calendar ID, Sheet ID, and timezone are required.');
       return;
     }
     if (!cal.includes('@')) {
@@ -95,12 +115,7 @@ export const Settings: React.FC = () => {
       setError('Paste the full Google Sheet ID.');
       return;
     }
-    const aiPhone = aiPhoneNumber.trim();
     const ownerPhone = clientPhoneNumber.trim();
-    if (!aiPhone || aiPhone.replace(/\D/g, '').length < 10) {
-      setError('AI assistant number needs 10+ digits and must exactly match Twilio/VAPI inbound `to_number`.');
-      return;
-    }
     if (!ownerPhone || ownerPhone.replace(/\D/g, '').length < 10) {
       setError('Owner / personal mobile needs 10+ digits for notifications and CRM-style records.');
       return;
@@ -110,11 +125,10 @@ export const Settings: React.FC = () => {
       await postSetup({
         calendar_id: cal,
         sheet_id: sheet,
-        timezone,
-        phone_number: aiPhone,
+        timezone: tz,
         client_phone: ownerPhone,
         business_name: businessName.trim() || null,
-        working_hours: workingHours.trim() || null,
+        working_hours: summaryToWorkingHoursPayload(workingHoursSummary),
         slot_duration: slotDuration,
         services: parseServices,
         free_text: freeText.trim() || null,
@@ -149,16 +163,16 @@ export const Settings: React.FC = () => {
       {setupComplete && !editing && !loading && (
         <Card className="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">Connected ✅ — Calendar & Sheet are configured</p>
+            <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">Connected — Calendar and Sheet are configured</p>
             <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
-              Edit setup
+              Edit
             </Button>
           </div>
         </Card>
       )}
 
       <form onSubmit={handleSave} className="space-y-8">
-        <Card title="Integrations & routing" description="Calendar, Sheets audit trail, and business phone used for VAPI routing">
+        <Card title="Integrations" description="Google Calendar and Sheets (audit trail). AI inbound numbers are provisioned in your backend (Twilio / VAPI).">
           <div className="space-y-5 pt-2">
             <Input
               label="Google Calendar ID"
@@ -166,6 +180,7 @@ export const Settings: React.FC = () => {
               onChange={(e) => setCalendarId(e.target.value)}
               placeholder="owner@business.com"
               disabled={inputDisabled}
+              required
             />
             <Input
               label="Google Sheet ID"
@@ -173,24 +188,15 @@ export const Settings: React.FC = () => {
               onChange={(e) => setSheetId(e.target.value)}
               placeholder="ID between spreadsheets/d/ and /edit"
               disabled={inputDisabled}
+              required
             />
-            <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled}>
+            <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled} required>
               {COMMON_TIMEZONES.map((tz) => (
                 <option key={tz} value={tz}>
                   {tz}
                 </option>
               ))}
             </Select>
-            <Input
-              label="AI assistant number (Twilio / VAPI DID)"
-              placeholder="+1 ..."
-              value={aiPhoneNumber}
-              onChange={(e) => setAiPhoneNumber(e.target.value)}
-              disabled={inputDisabled}
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Must exactly match webhook <code className="text-xs">to_number</code> so callers route to this workspace.
-            </p>
             <Input
               label="Owner personal / contact number"
               placeholder="+1 ..."
@@ -199,7 +205,7 @@ export const Settings: React.FC = () => {
               disabled={inputDisabled}
             />
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Your direct line kept separate from the AI business number shown to callers.
+              Your direct line for notifications; separate from the AI line configured for webhooks.
             </p>
           </div>
         </Card>
@@ -216,8 +222,8 @@ export const Settings: React.FC = () => {
             <Input
               label="Working hours (summary)"
               placeholder="Mon–Fri 9am–6pm EST"
-              value={workingHours}
-              onChange={(e) => setWorkingHours(e.target.value)}
+              value={workingHoursSummary}
+              onChange={(e) => setWorkingHoursSummary(e.target.value)}
               disabled={inputDisabled}
             />
             <div>
@@ -271,7 +277,7 @@ export const Settings: React.FC = () => {
           <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
             <li>Google Calendar owns availability queries and finalized appointment events.</li>
             <li>Google Sheets stores a searchable booking log wired to your sheet integration.</li>
-            <li>Dashboard booking metrics come from lightweight local session memory until richer analytics arrives.</li>
+            <li>Dashboard and analytics load booking history from the server only (no browser cache).</li>
           </ul>
         </Card>
 

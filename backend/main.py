@@ -15,10 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from backend.db.database import SessionLocal
+from backend.db.database import SessionLocal, engine
+from backend.db.migrate import migrate_schema
 from backend.models.booking import BookingRequest
+from backend.models.booking_record import BookingRecord
 from backend.models.client import Client
-from backend.models.email_otp import EmailOTP
 from backend.services.auth_service import (
     create_access_token,
     decode_token,
@@ -26,11 +27,14 @@ from backend.services.auth_service import (
     verify_password,
 )
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
+from backend.services.email_service import send_otp_email
 
 # ---------------- INIT ---------------- #
 app = FastAPI()
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "my-secret-123")
+
+migrate_schema(engine)
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
@@ -110,7 +114,6 @@ class LoginRequest(BaseModel):
 
 
 class SetupPayload(BaseModel):
-    phone_number: str
     client_phone: Optional[str] = None
 
     calendar_id: str
@@ -123,7 +126,7 @@ class SetupPayload(BaseModel):
     services: List[Any]
     free_text: Optional[str] = None
 
-    @field_validator("phone_number", "calendar_id", "sheet_id", "timezone", "business_name")
+    @field_validator("calendar_id", "sheet_id", "timezone", "business_name")
     @classmethod
     def _required_non_empty(cls, value: str) -> str:
         v = value.strip()
@@ -164,21 +167,20 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
 
     try:
+        code = _generate_otp_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=5)
         client = Client(
             name=data.name.strip(),
             email=email,
             password=hash_password(data.password),
+            otp_code=code,
+            otp_expiry=expires_at,
+            is_verified=False,
         )
         db.add(client)
-        db.flush()
-
-        code = _generate_otp_code()
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
-        db.query(EmailOTP).filter(EmailOTP.email == email).delete()
-        db.add(EmailOTP(email=email, code=code, expires_at=expires_at))
         db.commit()
 
-        print(f"[MVP EMAIL] OTP for {email}: {code} (expires ~15m from signup, UTC naive)")
+        send_otp_email(email, code)
 
         return {"status": "pending_verification", "email": email}
 
@@ -193,25 +195,19 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
 def verify_otp(payload: VerifyOTPRequest, db: Session = Depends(get_db)):
     email = payload.email.strip().lower()
 
-    row = db.query(EmailOTP).filter(EmailOTP.email == email).first()
-    if not row:
-        raise HTTPException(status_code=400, detail="Invalid or expired code")
-
-    if row.expires_at < datetime.utcnow():
-        db.delete(row)
-        db.commit()
-        raise HTTPException(status_code=400, detail="OTP expired")
-
-    if row.code.strip() != payload.code.strip():
-        raise HTTPException(status_code=400, detail="Invalid code")
-
     client = db.query(Client).filter(Client.email == email).first()
     if not client:
-        db.delete(row)
-        db.commit()
         raise HTTPException(status_code=404, detail="User not found")
 
-    db.delete(row)
+    if not client.otp_expiry or client.otp_expiry < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="OTP expired")
+
+    if not client.otp_code or client.otp_code.strip() != payload.code.strip():
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    client.is_verified = True
+    client.otp_code = None
+    client.otp_expiry = None
     db.commit()
 
     token = create_access_token({"client_id": str(client.id)})
@@ -227,9 +223,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     if not client or not verify_password(data.password, client.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    pending_otp = db.query(EmailOTP).filter(EmailOTP.email == data.email.strip().lower()).first()
-    if pending_otp:
-        raise HTTPException(status_code=403, detail="Verify your email with the OTP we sent.")
+    if not client.is_verified:
+        raise HTTPException(status_code=403, detail="Verify your email first")
 
     token = create_access_token({"client_id": str(client.id)})
     return {"access_token": token}
@@ -245,7 +240,11 @@ def get_client_data(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    setup_ready = bool(client.calendar_id and client.sheet_id)
+    setup_ready = bool(
+        (client.calendar_id or "").strip()
+        and (client.sheet_id or "").strip()
+        and (client.timezone or "").strip()
+    )
     return {
         "name": client.name,
         "minutes_used": 0,
@@ -276,10 +275,6 @@ def setup(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    if not payload.phone_number:
-        raise HTTPException(status_code=422, detail="phone_number is required")
-
-    client.phone_number = payload.phone_number
     client.client_phone = payload.client_phone
     client.calendar_id = payload.calendar_id
     client.sheet_id = payload.sheet_id
@@ -294,6 +289,38 @@ def setup(
     db.refresh(client)
 
     return {"status": "setup_saved"}
+
+
+@app.get("/bookings")
+def list_bookings(
+    client_id: str = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
+    """Booking history for dashboard; empty if integrations are not connected."""
+    cid = _parse_client_uuid(client_id)
+    client = db.query(Client).filter(Client.id == cid).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if not ((client.calendar_id or "").strip() and (client.sheet_id or "").strip()):
+        return []
+    rows = (
+        db.query(BookingRecord)
+        .filter(BookingRecord.client_id == cid)
+        .order_by(BookingRecord.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "phone": r.phone,
+            "date": r.date,
+            "time": r.time,
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
 
 
 # ---------------- AVAILABILITY / BOOK (JWT) ---------------- #
@@ -343,6 +370,7 @@ def book_web(
             timezone_str=client.timezone or "America/New_York",
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
+            db=db,
         )
 
     except HTTPException:
@@ -419,6 +447,7 @@ def vapi_book(
             timezone_str=timezone,
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
+            db=db,
         )
 
     except HTTPException:

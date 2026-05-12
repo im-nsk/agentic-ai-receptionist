@@ -38,8 +38,15 @@ export const Login: React.FC = () => {
       loginWithToken(response.access_token);
       navigate('/dashboard', { replace: true });
     } catch (error) {
-      const msg = getApiErrorMessage(error).toLowerCase();
-      setError(msg.includes('invalid') || msg.includes('401') ? 'Invalid email or password.' : getApiErrorMessage(error));
+      const raw = getApiErrorMessage(error);
+      const lower = raw.toLowerCase();
+      if (lower.includes('verify your email')) {
+        setError(raw);
+      } else if (lower.includes('invalid') || lower.includes('401')) {
+        setError('Invalid email or password.');
+      } else {
+        setError(raw);
+      }
     } finally {
       setIsLoading(false);
     }

@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { getBookings, getClient } from '@/api/client';
+import { getApiErrorMessage } from '@/api/errors';
 import { Card } from '@/components/ui/Card';
 import { Table, TableCell, TableRow } from '@/components/ui/Table';
 import { BarChart3, Calendar, Clock, Phone, Target } from 'lucide-react';
 import { useAuth } from '@/hooks/AuthContext';
 import {
-  aggregateLast7DayCounts,
-  getStoredBookings,
-  successRateFromStored,
+  aggregateLast7DayCountsFromBookings,
+  successRateFromBookings,
   sumConfirmedBookings,
-} from '@/utils/bookingStorage';
+} from '@/utils/bookingStats';
 
 function barHeightClass(count: number, max: number): string {
   if (max <= 0 || count <= 0) return 'h-2';
@@ -22,11 +23,33 @@ function barHeightClass(count: number, max: number): string {
 
 export const Dashboard: React.FC = () => {
   const { profile } = useAuth();
-  const [refreshKey, setRefreshKey] = useState(0);
-  const bookings = getStoredBookings();
-  const totalBookings = sumConfirmedBookings();
-  const successRate = successRateFromStored();
-  const trends = aggregateLast7DayCounts();
+  const [bookings, setBookings] = useState<Awaited<ReturnType<typeof getBookings>>>([]);
+  const [setupComplete, setSetupComplete] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+    try {
+      const [rows, client] = await Promise.all([getBookings(), getClient()]);
+      setBookings(rows);
+      setSetupComplete(Boolean(client.setup_complete));
+    } catch (e) {
+      setLoadError(getApiErrorMessage(e));
+      setBookings([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const totalBookings = sumConfirmedBookings(bookings);
+  const successRate = successRateFromBookings(bookings);
+  const trends = aggregateLast7DayCountsFromBookings(bookings);
   const maxTrend = Math.max(...trends, 1);
   const recent = bookings.slice(0, 8);
 
@@ -37,7 +60,10 @@ export const Dashboard: React.FC = () => {
     return now.toLocaleDateString(undefined, { weekday: 'short' });
   });
 
-  const avgCallDuration = '45s';
+  const emptyMessage =
+    !setupComplete && bookings.length === 0
+      ? 'No bookings yet. Connect Google Calendar and Sheet in Settings to record bookings.'
+      : 'No bookings yet';
 
   return (
     <div className="space-y-8">
@@ -50,12 +76,22 @@ export const Dashboard: React.FC = () => {
         </div>
         <button
           type="button"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+          onClick={() => void load()}
+          disabled={loading}
+          className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
         >
-          Refresh
+          {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+
+      {loadError && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-50">
+          {loadError}{' '}
+          <button type="button" onClick={() => void load()} className="underline">
+            Retry
+          </button>
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="flex gap-4">
@@ -90,7 +126,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Avg call duration
             </p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">{avgCallDuration}</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50">--</p>
           </div>
         </Card>
         <Card className="flex gap-4">
@@ -109,7 +145,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-6">
-        <Card title="Booking trends" description="Last seven session days">
+        <Card title="Booking trends" description="Last seven days (confirmed bookings by date)">
           <div className="flex h-48 items-end gap-2 border-t border-slate-100 pt-6 dark:border-slate-800">
             {trends.map((count, i) => (
               <div key={`${dayLabels[i]}-${count}`} className="flex flex-1 flex-col items-center gap-2">
@@ -127,11 +163,9 @@ export const Dashboard: React.FC = () => {
         </Card>
       </div>
 
-      <Card title="Recent bookings" description="Latest confirmed activity">
+      <Card title="Recent bookings" description="Latest activity from your workspace">
         {recent.length === 0 ? (
-          <p className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">
-            No bookings yet. Start from Booking.
-          </p>
+          <p className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">{emptyMessage}</p>
         ) : (
           <Table headers={['Guest', 'When', 'Phone', 'Outcome']}>
             {recent.map((row) => (

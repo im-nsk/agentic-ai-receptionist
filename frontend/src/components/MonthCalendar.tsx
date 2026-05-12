@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/utils/cn';
-import { toISODateLocal } from '@/utils/bookingStorage';
+import { toISODateLocal } from '@/utils/date';
 import { Button } from '@/components/ui/Button';
 
 interface MonthCalendarProps {

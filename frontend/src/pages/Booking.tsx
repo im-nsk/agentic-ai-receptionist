@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { getClientIdFromToken } from '@/utils/auth';
-import { addStoredBooking, toISODateLocal } from '@/utils/bookingStorage';
+import { toISODateLocal } from '@/utils/date';
 import { WORK_TIME_SLOTS } from '@/utils/slots';
 
 export const Booking: React.FC = () => {
@@ -84,13 +84,6 @@ export const Booking: React.FC = () => {
         time: selectedTime,
       });
       const ok = res.status === 'confirmed';
-      addStoredBooking({
-        name: cleanName,
-        phone: cleanPhone,
-        date: dateIso,
-        time: selectedTime,
-        status: ok ? 'confirmed' : 'failed',
-      });
       if (!ok) {
         setError(res.message || 'Slot could not be confirmed.');
       } else {

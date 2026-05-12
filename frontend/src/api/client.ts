@@ -72,7 +72,7 @@ export interface ClientResponse {
   client_phone: string;
   setup_complete: boolean;
   business_name: string;
-  working_hours: string;
+  working_hours: Record<string, unknown> | string | null;
   slot_duration: number;
   services: string[];
   free_text: string;
@@ -81,14 +81,23 @@ export interface ClientResponse {
 export interface SetupPayload {
   calendar_id: string;
   sheet_id: string;
-  timezone?: string;
-  phone_number?: string | null;
+  timezone: string;
   client_phone?: string | null;
   business_name?: string | null;
-  working_hours?: string | null;
+  working_hours: Record<string, unknown>;
   slot_duration?: number | null;
   services?: string[] | null;
   free_text?: string | null;
+}
+
+export interface BookingRowResponse {
+  id: string;
+  name: string;
+  phone: string;
+  date: string;
+  time: string;
+  status: string;
+  created_at: string | null;
 }
 
 export interface AppointmentPayload {
@@ -131,6 +140,11 @@ export async function getClient() {
 
 export async function postSetup(payload: SetupPayload) {
   const { data } = await api.post<{ status: string }>('/setup', payload);
+  return data;
+}
+
+export async function getBookings() {
+  const { data } = await api.get<BookingRowResponse[]>('/bookings');
   return data;
 }
 
