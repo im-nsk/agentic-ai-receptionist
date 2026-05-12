@@ -29,6 +29,7 @@ from backend.services.booking_datetime import BookingDatetimeError, assert_booki
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
 from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
+from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
 from backend.services.sheets_service import (
     create_provisioned_booking_sheet,
     delete_booking_data_row,
@@ -455,6 +456,40 @@ def list_bookings(
     except Exception as e:
         print("BOOKINGS READ:", repr(e))
         return []
+
+
+@app.get("/analytics")
+def sheet_analytics(
+    client_id: str = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
+    """Live metrics from the tenant's Google Sheet (no PostgreSQL booking storage)."""
+    cid = _parse_client_uuid(client_id)
+    client = db.query(Client).filter(Client.id == cid).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    tz = (client.timezone or "America/New_York").strip() or "America/New_York"
+    integrations_ready = bool((client.calendar_id or "").strip() and (client.sheet_id or "").strip())
+    sheet_id = (client.sheet_id or "").strip()
+    if not integrations_ready:
+        return empty_analytics_payload(
+            integrations_ready=False,
+            rows_read_ok=False,
+            timezone_str=tz,
+        )
+    try:
+        rows = list_booking_rows_for_dashboard(sheet_id, limit=2000)
+    except Exception as e:
+        print("ANALYTICS READ:", repr(e))
+        return empty_analytics_payload(
+            integrations_ready=True,
+            rows_read_ok=False,
+            timezone_str=tz,
+        )
+    out = compute_sheet_analytics(rows, tz)
+    out["integrations_ready"] = True
+    out["rows_read_ok"] = True
+    return out
 
 
 @app.patch("/bookings/{row_id}")

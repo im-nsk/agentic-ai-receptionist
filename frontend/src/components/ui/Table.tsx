@@ -15,7 +15,7 @@ export const Table: React.FC<TableProps> = ({ headers, children, className }) =>
         className
       )}
     >
-      <table className="w-full caption-bottom text-left text-sm">
+      <table className="w-full min-w-[32rem] caption-bottom text-left text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900">
             {headers.map((header) => (
