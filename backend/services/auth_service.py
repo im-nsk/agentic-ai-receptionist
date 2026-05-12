@@ -1,11 +1,17 @@
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
-import os
 import hashlib
+import os
+import warnings
 
 # 🔐 Secret key (use ENV in production)
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")
+if os.getenv("APP_ENV", "").lower() in ("production", "prod") and SECRET_KEY == "supersecretkey":
+    warnings.warn(
+        "SECRET_KEY is still the default; set a strong SECRET_KEY in the environment before going live.",
+        stacklevel=1,
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
 

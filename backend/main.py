@@ -44,13 +44,23 @@ app = FastAPI()
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "my-secret-123")
 
+if os.getenv("APP_ENV", "").lower() in ("production", "prod") and VAPI_API_KEY == "my-secret-123":
+    import warnings
+
+    warnings.warn(
+        "VAPI_API_KEY is still the development default; set a strong secret in production.",
+        stacklevel=1,
+    )
+
 migrate_schema(engine)
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["https://agentic-ai-receptionist-frontend.onrender.com"],
+    # JWT is sent via Authorization header, not cookies — False avoids CORS invalid
+    # "*"+"credentials:true" combinations and matches typical browser rules.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -581,6 +591,8 @@ def availability(
         client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        if req.client_id != client.id:
+            raise HTTPException(status_code=400, detail="client_id does not match authenticated session")
         return check_availability_logic(
             date=req.date,
             time=req.time,
@@ -606,6 +618,8 @@ def book_web(
         client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        if req.client_id != client.id:
+            raise HTTPException(status_code=400, detail="client_id does not match authenticated session")
         return book_appointment_logic(
             client_id=client.id,
             name=req.name,
