@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { getBookings, getClient } from '@/api/client';
+import { deleteBooking, getBookings, getClient, patchBooking } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { Input } from '@/components/ui/Input';
 import { Table, TableCell, TableRow } from '@/components/ui/Table';
-import { BarChart3, Calendar, Clock, Phone, Target } from 'lucide-react';
+import { BarChart3, Calendar, Clock, MoreHorizontal, Phone, Target } from 'lucide-react';
 import { useAuth } from '@/hooks/AuthContext';
 import {
   aggregateLast7DayCountsFromBookings,
@@ -21,12 +23,27 @@ function barHeightClass(count: number, max: number): string {
   return 'h-32';
 }
 
+function statusPillClass(status: string): string {
+  const s = status.toLowerCase();
+  if (s === 'confirmed' || s === 'booked')
+    return 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200';
+  if (s === 'cancelled' || s === 'canceled')
+    return 'bg-amber-50 text-amber-900 dark:bg-amber-950/60 dark:text-amber-100';
+  return 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200';
+}
+
 export const Dashboard: React.FC = () => {
   const { profile } = useAuth();
   const [bookings, setBookings] = useState<Awaited<ReturnType<typeof getBookings>>>([]);
   const [setupComplete, setSetupComplete] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [rowBusy, setRowBusy] = useState<number | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [openMenuRow, setOpenMenuRow] = useState<number | null>(null);
+  const [rescheduleRowId, setRescheduleRowId] = useState<number | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleTime, setRescheduleTime] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,7 +68,7 @@ export const Dashboard: React.FC = () => {
   const successRate = successRateFromBookings(bookings);
   const trends = aggregateLast7DayCountsFromBookings(bookings);
   const maxTrend = Math.max(...trends, 1);
-  const recent = bookings.slice(0, 8);
+  const recent = bookings.slice(0, 12);
 
   const dayLabels = Array.from({ length: 7 }, (_, idx) => {
     const now = new Date();
@@ -64,6 +81,66 @@ export const Dashboard: React.FC = () => {
     !setupComplete && bookings.length === 0
       ? 'No bookings yet. Connect Google Calendar and Sheet in Settings to record bookings.'
       : 'No bookings yet';
+
+  const beginReschedule = (row: (typeof bookings)[0]) => {
+    setActionError('');
+    setOpenMenuRow(null);
+    setRescheduleRowId(row.row_id);
+    setRescheduleDate(row.date || '');
+    setRescheduleTime(row.time || '');
+  };
+
+  const submitReschedule = async () => {
+    if (rescheduleRowId == null) return;
+    const d = rescheduleDate.trim();
+    const t = rescheduleTime.trim();
+    if (!d || !t) {
+      setActionError('Enter both date and time to reschedule.');
+      return;
+    }
+    setRowBusy(rescheduleRowId);
+    setActionError('');
+    try {
+      await patchBooking(rescheduleRowId, { date: d, time: t });
+      setRescheduleRowId(null);
+      await load();
+    } catch (e) {
+      setActionError(getApiErrorMessage(e));
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const handleCancel = async (rowId: number) => {
+    if (!window.confirm('Mark this booking as cancelled in the sheet?')) return;
+    setRowBusy(rowId);
+    setActionError('');
+    setOpenMenuRow(null);
+    try {
+      await patchBooking(rowId, { status: 'cancelled' });
+      await load();
+    } catch (e) {
+      setActionError(getApiErrorMessage(e));
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const handleDelete = async (rowId: number) => {
+    if (!window.confirm('Permanently delete this row from Google Sheets? This cannot be undone.')) return;
+    setRowBusy(rowId);
+    setActionError('');
+    setOpenMenuRow(null);
+    try {
+      await deleteBooking(rowId);
+      if (rescheduleRowId === rowId) setRescheduleRowId(null);
+      await load();
+    } catch (e) {
+      setActionError(getApiErrorMessage(e));
+    } finally {
+      setRowBusy(null);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -90,6 +167,12 @@ export const Dashboard: React.FC = () => {
           <button type="button" onClick={() => void load()} className="underline">
             Retry
           </button>
+        </p>
+      )}
+
+      {actionError && (
+        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-100">
+          {actionError}
         </p>
       )}
 
@@ -163,43 +246,100 @@ export const Dashboard: React.FC = () => {
         </Card>
       </div>
 
-      <Card title="Recent bookings" description="Latest activity from your workspace">
+      <Card title="Recent bookings" description="Live data from your Google Sheet (row actions update the sheet)">
         {recent.length === 0 ? (
           <p className="py-10 text-center text-sm text-slate-500 dark:text-slate-400">{emptyMessage}</p>
         ) : (
-          <Table headers={['Guest', 'When', 'Phone', 'Outcome']}>
-            {recent.map((row) => (
-              <TableRow key={row.id}>
-                <TableCell className="font-medium text-slate-900 dark:text-slate-100">{row.name}</TableCell>
-                <TableCell>
-                  {row.date}{' '}
-                  <span className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
-                    <Clock className="h-3 w-3" />
-                    {row.time}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <span className="inline-flex items-center gap-1">
-                    <Phone className="h-3 w-3 text-slate-400" />
-                    {row.phone}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <span
-                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      row.status === 'confirmed'
-                        ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200'
-                        : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200'
-                    }`}
-                  >
-                    {row.status}
-                  </span>
-                </TableCell>
-              </TableRow>
-            ))}
-          </Table>
+          <>
+            <Table headers={['Guest', 'When', 'Phone', 'Outcome', 'Actions']}>
+              {recent.map((row) => (
+                <TableRow key={`${row.row_id}-${row.id}`}>
+                  <TableCell className="font-medium text-slate-900 dark:text-slate-100">{row.name}</TableCell>
+                  <TableCell>
+                    {row.date}{' '}
+                    <span className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                      <Clock className="h-3 w-3" />
+                      {row.time}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-flex items-center gap-1">
+                      <Phone className="h-3 w-3 text-slate-400" />
+                      {row.phone}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${statusPillClass(row.status)}`}>
+                      {row.status}
+                    </span>
+                  </TableCell>
+                  <TableCell className="relative w-44">
+                    <button
+                      type="button"
+                      disabled={rowBusy === row.row_id}
+                      onClick={() => setOpenMenuRow((v) => (v === row.row_id ? null : row.row_id))}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                      {rowBusy === row.row_id ? '…' : 'Actions'}
+                    </button>
+                    {openMenuRow === row.row_id && (
+                      <div className="absolute right-0 top-full z-[110] mt-1 min-w-[10rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                        <button
+                          type="button"
+                          className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                          onClick={() => beginReschedule(row)}
+                        >
+                          Reschedule
+                        </button>
+                        <button
+                          type="button"
+                          className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                          onClick={() => void handleCancel(row.row_id)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="block w-full px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                          onClick={() => void handleDelete(row.row_id)}
+                        >
+                          Delete row
+                        </button>
+                      </div>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </Table>
+            {openMenuRow !== null && (
+              <button
+                type="button"
+                className="fixed inset-0 z-[100] cursor-default bg-slate-900/10 dark:bg-black/30"
+                aria-label="Close menu"
+                onClick={() => setOpenMenuRow(null)}
+              />
+            )}
+          </>
         )}
       </Card>
+
+      {rescheduleRowId !== null && (
+        <Card title="Reschedule booking" description="Updates the Google Sheet row (calendar event is not moved automatically).">
+          <div className="mt-4 grid max-w-md gap-4 sm:grid-cols-2">
+            <Input label="Date (YYYY-MM-DD)" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)} />
+            <Input label="Time" placeholder="14:30" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button type="button" isLoading={rowBusy === rescheduleRowId} onClick={() => void submitReschedule()}>
+              Save new time
+            </Button>
+            <Button type="button" variant="outline" disabled={rowBusy === rescheduleRowId} onClick={() => setRescheduleRowId(null)}>
+              Close
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 };
