@@ -23,32 +23,9 @@ function parseHourMinuteToMinutes(s: string): number | null {
   return h * 60 + min;
 }
 
-function format12FromMinutes(totalMinutes: number): string {
-  const normalized = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
-  const h24 = Math.floor(normalized / 60);
-  const minute = normalized % 60;
-  const ampm = h24 < 12 ? 'AM' : 'PM';
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  const mm = minute.toString().padStart(2, '0');
-  return `${h12}:${mm} ${ampm}`;
-}
-
 export function minutesToTimeInputValue(totalMinutes: number): string {
   const m = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
   const h = Math.floor(m / 60);
   const min = m % 60;
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
-
-/**
- * 12-hour slot labels (e.g. "9:15 AM") from tenant slot_duration and working_hours.window.
- */
-export function buildBookingDaySlots(slotDurationMinutes: number, workingHours: unknown): string[] {
-  const dur = Math.max(1, Math.floor(Number(slotDurationMinutes)) || 30);
-  const { startMin, endMin } = dailyWindowMinutesFromWorkingHours(workingHours);
-  const out: string[] = [];
-  for (let m = startMin; m < endMin; m += dur) {
-    out.push(format12FromMinutes(m));
-  }
-  return out;
 }

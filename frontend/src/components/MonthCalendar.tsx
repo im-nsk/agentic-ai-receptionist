@@ -9,6 +9,8 @@ interface MonthCalendarProps {
   onSelect: (d: Date) => void;
   /** YYYY-MM-DD — days strictly before this are disabled (e.g. tenant-local today). */
   minSelectableDateIso?: string;
+  /** Extra non-selectable days (e.g. blocked or closed weekdays). */
+  isDateDisabled?: (iso: string) => boolean;
 }
 
 const weekday = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -17,7 +19,7 @@ function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
 
-export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect, minSelectableDateIso }) => {
+export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect, minSelectableDateIso, isDateDisabled }) => {
   const [visible, setVisible] = useState(() => startOfMonth(selected));
 
   const { label, cells } = useMemo(() => {
@@ -97,13 +99,15 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect
           const isSelected = iso === selectedIso;
           const isToday = iso === todayIso;
           const isBeforeMin = minSelectableDateIso != null && minSelectableDateIso !== '' && iso < minSelectableDateIso;
+          const isExtraDisabled = isDateDisabled != null && isDateDisabled(iso);
+          const isDisabled = isBeforeMin || isExtraDisabled;
           return (
             <button
               key={`${iso}-${inMonth}`}
               type="button"
-              disabled={isBeforeMin}
+              disabled={isDisabled}
               onClick={() => {
-                if (isBeforeMin) return;
+                if (isDisabled) return;
                 onSelect(date);
               }}
               className={cn(
@@ -112,7 +116,7 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect
                 inMonth && 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800',
                 isSelected && 'bg-blue-600 text-white shadow-md hover:bg-blue-600 dark:hover:bg-blue-600',
                 !isSelected && isToday && inMonth && 'ring-1 ring-blue-500/50',
-                isBeforeMin && 'cursor-not-allowed opacity-35 hover:bg-transparent dark:hover:bg-transparent'
+                isDisabled && 'cursor-not-allowed opacity-35 hover:bg-transparent dark:hover:bg-transparent'
               )}
             >
               {date.getDate()}

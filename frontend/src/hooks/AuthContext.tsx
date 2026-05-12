@@ -11,8 +11,10 @@ interface ProfileSummary {
   timezone: string;
   /** Appointment slot length in minutes (drives booking UI + API validation). */
   slot_duration: number;
-  /** Includes optional `window: { start, end }` (HH:MM) for the daily booking grid. */
+  /** Legacy window fallback when weekly_availability is absent. */
   working_hours: Record<string, unknown> | string | null;
+  weekly_availability: Record<string, unknown> | null;
+  blocked_dates: string[] | null;
 }
 
 interface AuthContextType {
@@ -56,6 +58,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           client.working_hours === null || client.working_hours === undefined
             ? null
             : (client.working_hours as Record<string, unknown> | string),
+        weekly_availability:
+          client.weekly_availability && typeof client.weekly_availability === 'object'
+            ? (client.weekly_availability as Record<string, unknown>)
+            : null,
+        blocked_dates: Array.isArray(client.blocked_dates) ? (client.blocked_dates as string[]) : [],
       });
     } catch (e) {
       setProfile(null);

@@ -72,7 +72,10 @@ export interface ClientResponse {
   client_phone: string;
   setup_complete: boolean;
   business_name: string;
+  /** Legacy; scheduling uses weekly_availability. */
   working_hours: Record<string, unknown> | string | null;
+  weekly_availability?: Record<string, unknown> | null;
+  blocked_dates?: string[] | null;
   slot_duration: number;
   services: string[];
   free_text: string;
@@ -84,7 +87,8 @@ export interface SetupPayload {
   timezone: string;
   client_phone?: string | null;
   business_name?: string | null;
-  working_hours: Record<string, unknown>;
+  weekly_availability: Record<string, unknown>;
+  blocked_dates?: string[] | null;
   slot_duration?: number | null;
   services?: string[] | null;
   free_text?: string | null;
