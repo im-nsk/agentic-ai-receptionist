@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { getBookings } from '@/api/client';
+import { getApiErrorMessage } from '@/api/errors';
 import { Card } from '@/components/ui/Card';
 import { BarChart3, Calendar, Percent, Layers } from 'lucide-react';
 import {
-  aggregateLast7DayCounts,
-  successRateFromStored,
+  aggregateLast7DayCountsFromBookings,
+  successRateFromBookings,
   sumConfirmedBookings,
-} from '@/utils/bookingStorage';
+} from '@/utils/bookingStats';
 
 function barHeightClass(count: number, max: number): string {
   if (max <= 0 || count <= 0) return 'h-2';
@@ -17,21 +19,58 @@ function barHeightClass(count: number, max: number): string {
 }
 
 export const Analytics: React.FC = () => {
-  const total = sumConfirmedBookings();
-  const rate = successRateFromStored();
-  const week = aggregateLast7DayCounts();
-  const peak = Math.max(...week);
+  const [bookings, setBookings] = useState<Awaited<ReturnType<typeof getBookings>>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      setBookings(await getBookings());
+    } catch (e) {
+      setError(getApiErrorMessage(e));
+      setBookings([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const total = sumConfirmedBookings(bookings);
+  const rate = successRateFromBookings(bookings);
+  const week = aggregateLast7DayCountsFromBookings(bookings);
+  const peak = Math.max(...week, 0);
   const busiest = peak > 0 ? week.findIndex((x) => x === peak) : -1;
-  const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dayLabels = Array.from({ length: 7 }, (_, idx) => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    now.setDate(now.getDate() - (6 - idx));
+    return now.toLocaleDateString(undefined, { weekday: 'short' });
+  });
 
   return (
     <div className="space-y-8">
       <div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Analytics</h1>
-          <p className="text-slate-500 dark:text-slate-400">Track booking performance</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">Analytics</h1>
+          <p className="text-slate-500 dark:text-slate-400">Track booking performance from your server data</p>
         </div>
       </div>
+
+      {error && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-50">
+          {error}{' '}
+          <button type="button" onClick={() => void load()} className="underline">
+            Retry
+          </button>
+        </p>
+      )}
+
+      {loading && <p className="text-sm text-slate-500 dark:text-slate-400">Loading…</p>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card className="flex gap-4">
@@ -58,15 +97,15 @@ export const Analytics: React.FC = () => {
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Busiest day</p>
-            <p className="mt-2 text-xl font-semibold text-slate-900 dark:text-slate-50">{busiest >= 0 ? labels[busiest] : '--'}</p>
+            <p className="mt-2 text-xl font-semibold text-slate-900 dark:text-slate-50">{busiest >= 0 ? dayLabels[busiest] : '--'}</p>
           </div>
         </Card>
       </div>
 
-      <Card title="Last seven session days" description="Booking trend">
+      <Card title="Last seven days" description="Confirmed bookings by appointment date">
         <div className="flex h-48 items-end gap-3 border-t border-slate-100 pt-6 dark:border-slate-800">
           {week.map((count, idx) => (
-            <div key={`${labels[idx]}-${count}`} className="flex flex-1 flex-col items-center gap-2">
+            <div key={`${dayLabels[idx]}-${count}`} className="flex flex-1 flex-col items-center gap-2">
               <div className="flex h-36 w-full items-end justify-center">
                 <div
                   className={`w-full max-w-[2rem] rounded-md bg-blue-600 dark:bg-blue-500 ${barHeightClass(
@@ -75,7 +114,7 @@ export const Analytics: React.FC = () => {
                   )}`}
                 />
               </div>
-              <span className="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">{labels[idx]}</span>
+              <span className="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">{dayLabels[idx]}</span>
             </div>
           ))}
           <div className="hidden w-72 shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:block dark:border-slate-800 dark:bg-slate-950">
@@ -84,7 +123,7 @@ export const Analytics: React.FC = () => {
               Summary
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400">
-              Session-level trend only. Canonical records remain in Google Sheets.
+              Metrics reflect bookings stored for your account. Canonical rows are also written to Google Sheets when configured.
             </p>
           </div>
         </div>
