@@ -1,10 +1,12 @@
+import uuid
+
 from pydantic import BaseModel, Field, field_validator
 
 from backend.services.phone_validation import normalize_and_validate_phone
 
 
 class BookingRequest(BaseModel):
-    client_id: str
+    client_id: uuid.UUID
     name: str = Field(..., min_length=2)
     phone: str
     date: str
