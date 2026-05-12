@@ -9,7 +9,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from dateutil import parser
 
-from backend.services.booking_window import daily_booking_window_minutes
+from backend.services.availability_rules import (
+    is_date_blocked,
+    minutes_window_for_date,
+)
 from backend.services.sheets_service import save_to_sheet
 
 
@@ -52,6 +55,55 @@ def is_within_booking_window(dt, open_mins: int, close_mins: int) -> bool:
     return open_mins <= mins < close_mins
 
 
+def _tenant_rules_ok(
+    booking_dt,
+    date_str: str,
+    duration_minutes: int,
+    weekly_availability: Optional[Any],
+    blocked_dates: Optional[Any],
+    working_hours: Optional[Any],
+) -> bool:
+    if is_date_blocked(blocked_dates, date_str):
+        return False
+    win = minutes_window_for_date(weekly_availability, working_hours, date_str)
+    if win is None:
+        return False
+    open_m, close_m = win
+    if not is_valid_slot(booking_dt, duration_minutes):
+        return False
+    if not is_within_booking_window(booking_dt, open_m, close_m):
+        return False
+    return True
+
+
+def tenant_schedule_allows(
+    date,
+    time,
+    timezone,
+    duration_minutes: int = 30,
+    weekly_availability: Optional[Any] = None,
+    blocked_dates: Optional[Any] = None,
+    working_hours: Optional[Any] = None,
+) -> bool:
+    """Blocked dates + weekly hours + slot grid (no Google Calendar)."""
+    try:
+        booking_dt = parse_datetime(date, time, timezone)
+    except Exception:
+        return False
+    duration_minutes = duration_minutes or 30
+    start_time = booking_dt.astimezone(ZoneInfo("UTC"))
+    if start_time <= datetime.now(ZoneInfo("UTC")):
+        return False
+    return _tenant_rules_ok(
+        booking_dt,
+        str(date).strip(),
+        duration_minutes,
+        weekly_availability,
+        blocked_dates,
+        working_hours,
+    )
+
+
 # ---------------- CHECK AVAILABILITY ---------------- #
 
 def check_availability(
@@ -60,10 +112,15 @@ def check_availability(
     calendar_id,
     timezone,
     duration_minutes: int = 30,
+    weekly_availability: Optional[Any] = None,
+    blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
 ):
 
-    booking_dt = parse_datetime(date, time, timezone)
+    try:
+        booking_dt = parse_datetime(date, time, timezone)
+    except Exception:
+        return False
 
     # ❌ Missing config safety
     if not calendar_id:
@@ -74,18 +131,21 @@ def check_availability(
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
     end_time = start_time + timedelta(minutes=duration_minutes)
 
-    # ❌ Past
+    # Past
     if start_time <= datetime.now(ZoneInfo("UTC")):
         return False
 
-    # ❌ Invalid slot boundaries
-    if not is_valid_slot(booking_dt, duration_minutes):
+    if not _tenant_rules_ok(
+        booking_dt,
+        str(date).strip(),
+        duration_minutes,
+        weekly_availability,
+        blocked_dates,
+        working_hours,
+    ):
         return False
 
-    open_m, close_m = daily_booking_window_minutes(working_hours)
-    if not is_within_booking_window(booking_dt, open_m, close_m):
-        return False
-
+    # Google Calendar conflicts
     events = service.events().list(
         calendarId=calendar_id,
         timeMin=start_time.isoformat(),
@@ -108,6 +168,8 @@ def create_event(
     duration_minutes: int = 30,
     source: str = "web",
     notes: str = "",
+    weekly_availability: Optional[Any] = None,
+    blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
 ):
     try:
@@ -124,6 +186,8 @@ def create_event(
             calendar_id,
             timezone,
             duration_minutes=duration_minutes,
+            weekly_availability=weekly_availability,
+            blocked_dates=blocked_dates,
             working_hours=working_hours,
         ):
             return False

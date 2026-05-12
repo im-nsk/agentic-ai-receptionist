@@ -24,6 +24,8 @@ class Client(Base):
 
     business_name = Column(String)
     working_hours = Column(JSONB)
+    weekly_availability = Column(JSONB)
+    blocked_dates = Column(JSONB)
     slot_duration = Column(Integer)
     services = Column(JSONB)
     free_text = Column(Text)

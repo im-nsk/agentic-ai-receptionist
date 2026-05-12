@@ -27,6 +27,8 @@ from backend.services.auth_service import (
 )
 from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
+from backend.services.availability_rules import normalize_blocked_dates, validate_weekly_availability_dict
+from backend.services.calendar_service import check_availability, tenant_schedule_allows
 from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
@@ -161,10 +163,20 @@ class SetupPayload(BaseModel):
     timezone: str
 
     business_name: str
-    working_hours: dict
+    weekly_availability: Dict[str, Any]
+    blocked_dates: List[str] = Field(default_factory=list)
     slot_duration: int = Field(..., ge=1)
     services: List[Any]
     free_text: Optional[str] = None
+
+    @field_validator("blocked_dates", mode="before")
+    @classmethod
+    def _blocked_dates_list(cls, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("blocked_dates must be a list of YYYY-MM-DD strings")
+        return value
 
     @field_validator("calendar_id", "timezone", "business_name")
     @classmethod
@@ -391,6 +403,8 @@ def get_client_data(
         "setup_complete": setup_ready,
         "business_name": client.business_name or "",
         "working_hours": client.working_hours or {},
+        "weekly_availability": client.weekly_availability if isinstance(client.weekly_availability, dict) else {},
+        "blocked_dates": client.blocked_dates if isinstance(client.blocked_dates, list) else [],
         "slot_duration": client.slot_duration or 30,
         "services": client.services or [],
         "free_text": client.free_text or "",
@@ -438,7 +452,12 @@ def setup(
     client.calendar_id = payload.calendar_id
     client.timezone = payload.timezone
     client.business_name = payload.business_name
-    client.working_hours = payload.working_hours
+    try:
+        client.weekly_availability = validate_weekly_availability_dict(payload.weekly_availability)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    client.blocked_dates = normalize_blocked_dates(payload.blocked_dates)
+    client.working_hours = {}
     client.slot_duration = payload.slot_duration
     client.services = payload.services
     client.free_text = payload.free_text
@@ -540,6 +559,32 @@ def patch_booking_row_endpoint(
             assert_booking_start_in_future(merged_date, merged_time, client.timezone or "America/New_York")
         except BookingDatetimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        tz_use = client.timezone or "America/New_York"
+        dur = _client_slot_minutes(client)
+        cal_id = (client.calendar_id or "").strip()
+        if cal_id:
+            if not check_availability(
+                merged_date,
+                merged_time,
+                cal_id,
+                tz_use,
+                duration_minutes=dur,
+                weekly_availability=client.weekly_availability,
+                blocked_dates=client.blocked_dates,
+                working_hours=client.working_hours,
+            ):
+                raise HTTPException(status_code=400, detail="That time is not available.")
+        else:
+            if not tenant_schedule_allows(
+                merged_date,
+                merged_time,
+                tz_use,
+                duration_minutes=dur,
+                weekly_availability=client.weekly_availability,
+                blocked_dates=client.blocked_dates,
+                working_hours=client.working_hours,
+            ):
+                raise HTTPException(status_code=400, detail="That time is not available.")
     try:
         patch_booking_data_row(sheet_id, row_id, **updates)
     except LookupError:
@@ -599,6 +644,8 @@ def availability(
             calendar_id=client.calendar_id,
             timezone_str=client.timezone or "America/New_York",
             duration_minutes=_client_slot_minutes(client),
+            weekly_availability=client.weekly_availability,
+            blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
         )
     except HTTPException:
@@ -633,6 +680,8 @@ def book_web(
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
             db=db,
+            weekly_availability=client.weekly_availability,
+            blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
         )
 
@@ -685,6 +734,8 @@ def vapi_check(
         calendar_id=calendar_id,
         timezone_str=timezone,
         duration_minutes=_client_slot_minutes(client),
+        weekly_availability=client.weekly_availability,
+        blocked_dates=client.blocked_dates,
         working_hours=client.working_hours,
     )
 
@@ -727,6 +778,8 @@ def vapi_book(
             db=db,
             source="vapi",
             notes=notes,
+            weekly_availability=client.weekly_availability,
+            blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
         )
 

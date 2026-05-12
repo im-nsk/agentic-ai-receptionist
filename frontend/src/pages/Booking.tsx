@@ -10,7 +10,7 @@ import { useAuth } from '@/hooks/AuthContext';
 import { getClientIdFromToken } from '@/utils/auth';
 import { toISODateLocal } from '@/utils/date';
 import { phoneFieldError, normalizeAndValidatePhone } from '@/utils/phone';
-import { buildBookingDaySlots } from '@/utils/slots';
+import { buildBookingDaySlots, isCalendarDateUnavailable } from '@/utils/availability';
 import { isSlotInPastForTenant, todayYmdInTimeZone } from '@/utils/tenantTime';
 
 export const Booking: React.FC = () => {
@@ -33,18 +33,37 @@ export const Booking: React.FC = () => {
 
   const minSelectableYmd = useMemo(() => todayYmdInTimeZone(tenantTz), [tenantTz]);
 
+  const dateIso = toISODateLocal(selectedDate);
+
   const timeSlots = useMemo(
-    () => buildBookingDaySlots(profile?.slot_duration ?? 30, profile?.working_hours ?? null),
-    [profile?.slot_duration, profile?.working_hours]
+    () =>
+      buildBookingDaySlots(
+        profile?.slot_duration ?? 30,
+        profile?.weekly_availability ?? null,
+        profile?.working_hours ?? null,
+        profile?.blocked_dates ?? null,
+        dateIso
+      ),
+    [profile?.slot_duration, profile?.weekly_availability, profile?.working_hours, profile?.blocked_dates, dateIso]
   );
 
   const slotsLayoutKey = useMemo(() => timeSlots.join('|'), [timeSlots]);
+
+  const isDateDisabled = useMemo(() => {
+    return (iso: string) =>
+      isCalendarDateUnavailable(
+        profile?.weekly_availability ?? null,
+        profile?.working_hours ?? null,
+        profile?.blocked_dates ?? null,
+        iso
+      );
+  }, [profile?.weekly_availability, profile?.working_hours, profile?.blocked_dates]);
 
   useEffect(() => {
     setSelectedTime(null);
     setAvailable(null);
     setMessage('');
-  }, [slotsLayoutKey]);
+  }, [slotsLayoutKey, dateIso]);
 
   useEffect(() => {
     const cur = toISODateLocal(selectedDate);
@@ -54,7 +73,20 @@ export const Booking: React.FC = () => {
     }
   }, [minSelectableYmd, selectedDate]);
 
-  const dateIso = toISODateLocal(selectedDate);
+  useEffect(() => {
+    const curIso = toISODateLocal(selectedDate);
+    if (!isDateDisabled(curIso)) return;
+    const [y, m, d] = minSelectableYmd.split('-').map(Number);
+    let cursor = new Date(y, m - 1, d);
+    for (let i = 0; i < 370; i += 1) {
+      const iso = toISODateLocal(cursor);
+      if (!isDateDisabled(iso)) {
+        setSelectedDate(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate()));
+        return;
+      }
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+    }
+  }, [selectedDate, isDateDisabled, minSelectableYmd]);
 
   const checkSlot = async (time: string) => {
     const clientId = getClientIdFromToken();
@@ -149,7 +181,12 @@ export const Booking: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <Card className="lg:col-span-5 xl:col-span-4" title="Calendar" description="Select booking day">
-          <MonthCalendar selected={selectedDate} onSelect={setSelectedDate} minSelectableDateIso={minSelectableYmd} />
+          <MonthCalendar
+            selected={selectedDate}
+            onSelect={setSelectedDate}
+            minSelectableDateIso={minSelectableYmd}
+            isDateDisabled={isDateDisabled}
+          />
           <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400">
             Selected:&nbsp;
             <strong className="text-slate-900 dark:text-slate-100">
@@ -166,12 +203,12 @@ export const Booking: React.FC = () => {
         <div className="space-y-6 lg:col-span-7 xl:col-span-8">
           <Card
             title="Time slots"
-            description={`${profile?.slot_duration ?? 30}-minute grid from your daily window in Settings (timezone: ${tenantTz}).`}
+            description={`${profile?.slot_duration ?? 30}-minute slots from your weekly hours in Settings (timezone: ${tenantTz}). Blocked dates are not selectable.`}
           >
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
               {timeSlots.length === 0 ? (
                 <p className="col-span-full text-sm text-slate-600 dark:text-slate-400">
-                  No slots for this configuration — widen your daily booking window or shorten slot duration in Settings.
+                  No slots — this day may be closed, blocked, or outside your configured hours. Choose another day or update Settings.
                 </p>
               ) : (
                 timeSlots.map((slot) => {

@@ -46,6 +46,14 @@ def migrate_schema(engine: Engine) -> None:
         additions.append(("password_reset_otp", "TEXT"))
     if "password_reset_otp_expiry" not in existing:
         additions.append(("password_reset_otp_expiry", "TIMESTAMP"))
+    if "weekly_availability" not in existing:
+        additions.append(
+            ("weekly_availability", "JSONB" if dialect == "postgresql" else "TEXT")
+        )
+    if "blocked_dates" not in existing:
+        additions.append(
+            ("blocked_dates", "JSONB DEFAULT '[]'::jsonb" if dialect == "postgresql" else "TEXT")
+        )
 
     stmts = []
     for name, ctype in additions:
