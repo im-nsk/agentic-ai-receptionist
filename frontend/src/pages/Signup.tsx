@@ -38,11 +38,23 @@ export const Signup: React.FC = () => {
     setIsLoading(true);
     try {
       await signupApi({ name: n, email: em, password: pw });
-      navigate('/verify-email', { replace: true, state: { email: em } });
+      try {
+        sessionStorage.setItem('aireceptionist_pending_verification_email', em);
+      } catch {
+        /* ignore */
+      }
+      navigate(`/verify-email?email=${encodeURIComponent(em)}`, {
+        replace: true,
+        state: { email: em, freshSignup: true },
+      });
     } catch (err) {
       const raw = getApiErrorMessage(err);
       const msg = raw.toLowerCase();
-      setError(msg.includes('exists') || msg.includes('already') ? 'That email is already registered.' : raw);
+      setError(
+        msg.includes('exists') || msg.includes('already') || msg.includes('registered')
+          ? 'That email is already registered.'
+          : raw
+      );
     } finally {
       setIsLoading(false);
     }

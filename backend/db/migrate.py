@@ -42,6 +42,10 @@ def migrate_schema(engine: Engine) -> None:
         additions.append(
             ("is_verified", "BOOLEAN NOT NULL DEFAULT FALSE" if dialect == "postgresql" else "INTEGER NOT NULL DEFAULT 0")
         )
+    if "password_reset_otp" not in existing:
+        additions.append(("password_reset_otp", "TEXT"))
+    if "password_reset_otp_expiry" not in existing:
+        additions.append(("password_reset_otp_expiry", "TIMESTAMP"))
 
     stmts = []
     for name, ctype in additions:

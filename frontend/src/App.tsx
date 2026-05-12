@@ -7,7 +7,9 @@ import { Analytics } from '@/pages/Analytics';
 import { Billing } from '@/pages/Billing';
 import { Booking } from '@/pages/Booking';
 import { Dashboard } from '@/pages/Dashboard';
+import { ForgotPassword } from '@/pages/ForgotPassword';
 import { Login } from '@/pages/Login';
+import { ResetPassword } from '@/pages/ResetPassword';
 import { Settings } from '@/pages/Settings';
 import { Signup } from '@/pages/Signup';
 import { VerifyEmail } from '@/pages/VerifyEmail';
@@ -95,6 +97,22 @@ export default function App() {
           element={
             <GuestShell>
               <VerifyEmail />
+            </GuestShell>
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            <GuestShell>
+              <ForgotPassword />
+            </GuestShell>
+          }
+        />
+        <Route
+          path="/reset-password"
+          element={
+            <GuestShell>
+              <ResetPassword />
             </GuestShell>
           }
         />

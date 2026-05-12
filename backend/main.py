@@ -27,7 +27,7 @@ from backend.services.auth_service import (
     verify_password,
 )
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
-from backend.services.email_service import send_otp_email
+from backend.services.email_service import send_email_otp, send_password_reset_email
 
 # ---------------- INIT ---------------- #
 app = FastAPI()
@@ -113,6 +113,26 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class EmailOnlyRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def _norm_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def _norm_reset_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
 class SetupPayload(BaseModel):
     client_phone: Optional[str] = None
 
@@ -159,16 +179,27 @@ def home():
 # ---------------- SIGNUP (+ OTP draft) ---------------- #
 @app.post("/signup")
 def signup(data: SignupRequest, db: Session = Depends(get_db)):
-    existing = db.query(Client).filter(Client.email == data.email.strip().lower()).first()
-
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already exists")
-
     email = data.email.strip().lower()
+    existing = db.query(Client).filter(Client.email == email).first()
+
+    if existing and existing.is_verified:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    code = _generate_otp_code()
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
 
     try:
-        code = _generate_otp_code()
-        expires_at = datetime.utcnow() + timedelta(minutes=5)
+        if existing and not existing.is_verified:
+            existing.name = data.name.strip()
+            existing.password = hash_password(data.password)
+            existing.otp_code = code
+            existing.otp_expiry = expires_at
+            existing.password_reset_otp = None
+            existing.password_reset_otp_expiry = None
+            db.commit()
+            send_email_otp(email, code)
+            return {"status": "pending_verification", "email": email}
+
         client = Client(
             name=data.name.strip(),
             email=email,
@@ -179,9 +210,7 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
         )
         db.add(client)
         db.commit()
-
-        send_otp_email(email, code)
-
+        send_email_otp(email, code)
         return {"status": "pending_verification", "email": email}
 
     except Exception as e:
@@ -208,11 +237,62 @@ def verify_otp(payload: VerifyOTPRequest, db: Session = Depends(get_db)):
     client.is_verified = True
     client.otp_code = None
     client.otp_expiry = None
+    client.password_reset_otp = None
+    client.password_reset_otp_expiry = None
     db.commit()
 
     token = create_access_token({"client_id": str(client.id)})
 
     return {"access_token": token}
+
+
+@app.post("/resend-otp")
+def resend_otp(data: EmailOnlyRequest, db: Session = Depends(get_db)):
+    client = db.query(Client).filter(Client.email == data.email).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="No pending verification for this email")
+    if client.is_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified")
+    code = _generate_otp_code()
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
+    client.otp_code = code
+    client.otp_expiry = expires_at
+    db.commit()
+    send_email_otp(data.email, code)
+    return {"status": "sent"}
+
+
+@app.post("/forgot-password")
+def forgot_password(data: EmailOnlyRequest, db: Session = Depends(get_db)):
+    """Always returns the same shape; only sends mail for verified accounts."""
+    client = db.query(Client).filter(Client.email == data.email).first()
+    if client and client.is_verified:
+        code = _generate_otp_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=5)
+        client.password_reset_otp = code
+        client.password_reset_otp_expiry = expires_at
+        db.commit()
+        send_password_reset_email(data.email, code)
+    return {"status": "ok"}
+
+
+@app.post("/reset-password")
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    client = db.query(Client).filter(Client.email == data.email).first()
+    if not client or not client.is_verified:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+    if not client.password_reset_otp_expiry or client.password_reset_otp_expiry < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+    if not client.password_reset_otp or client.password_reset_otp.strip() != data.code.strip():
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code")
+
+    client.password = hash_password(data.new_password)
+    client.password_reset_otp = None
+    client.password_reset_otp_expiry = None
+    client.otp_code = None
+    client.otp_expiry = None
+    db.commit()
+    return {"status": "password_updated"}
 
 
 # ---------------- LOGIN ---------------- #
@@ -224,7 +304,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not client.is_verified:
-        raise HTTPException(status_code=403, detail="Verify your email first")
+        raise HTTPException(status_code=403, detail="Please verify your email")
 
     token = create_access_token({"client_id": str(client.id)})
     return {"access_token": token}

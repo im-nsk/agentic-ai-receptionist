@@ -92,8 +92,9 @@ export const Settings: React.FC = () => {
       .filter(Boolean);
   }, [servicesText]);
 
-  const locked = setupComplete && !editing && !loading;
-  const inputDisabled = loading || locked || saving;
+  const showForm = !setupComplete || editing;
+  const collapsed = setupComplete && !editing && !loading;
+  const inputDisabled = loading || (setupComplete && !editing) || saving;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,7 +149,9 @@ export const Settings: React.FC = () => {
     <div className="mx-auto max-w-3xl space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Settings</h1>
-        <p className="text-slate-500 dark:text-slate-400">Configure integrations and how your assistant describes your business</p>
+        <p className="text-slate-500 dark:text-slate-400">
+          {collapsed ? 'Your workspace is connected and ready.' : 'Connect Google services and tune how your assistant represents your business.'}
+        </p>
       </div>
 
       {loadErr && (
@@ -160,134 +163,179 @@ export const Settings: React.FC = () => {
         </p>
       )}
 
-      {setupComplete && !editing && !loading && (
-        <Card className="border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">Connected — Calendar and Sheet are configured</p>
-            <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+      {loading && (
+        <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-white py-16 dark:border-slate-800 dark:bg-slate-950">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-blue-600 border-t-transparent" />
+            <p className="text-sm text-slate-500 dark:text-slate-400">Loading settings…</p>
+          </div>
+        </div>
+      )}
+
+      {!loading && collapsed && (
+        <Card className="border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-white shadow-sm dark:border-emerald-900/50 dark:from-emerald-950/40 dark:to-slate-950">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-base font-semibold text-emerald-950 dark:text-emerald-50">Connected</p>
+              <p className="mt-1 text-sm text-emerald-900/90 dark:text-emerald-100/90">
+                Calendar and Sheet are configured. Your assistant uses these integrations for availability and booking logs.
+              </p>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="shrink-0 self-start sm:self-center" onClick={() => setEditing(true)}>
               Edit
             </Button>
           </div>
         </Card>
       )}
 
-      <form onSubmit={handleSave} className="space-y-8">
-        <Card title="Integrations" description="Google Calendar and Sheets (audit trail). AI inbound numbers are provisioned in your backend (Twilio / VAPI).">
-          <div className="space-y-5 pt-2">
-            <Input
-              label="Google Calendar ID"
-              value={calendarId}
-              onChange={(e) => setCalendarId(e.target.value)}
-              placeholder="owner@business.com"
-              disabled={inputDisabled}
-              required
-            />
-            <Input
-              label="Google Sheet ID"
-              value={sheetId}
-              onChange={(e) => setSheetId(e.target.value)}
-              placeholder="ID between spreadsheets/d/ and /edit"
-              disabled={inputDisabled}
-              required
-            />
-            <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled} required>
-              {COMMON_TIMEZONES.map((tz) => (
-                <option key={tz} value={tz}>
-                  {tz}
-                </option>
-              ))}
-            </Select>
-            <Input
-              label="Owner personal / contact number"
-              placeholder="+1 ..."
-              value={clientPhoneNumber}
-              onChange={(e) => setClientPhoneNumber(e.target.value)}
-              disabled={inputDisabled}
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Your direct line for notifications; separate from the AI line configured for webhooks.
-            </p>
+      {!loading && showForm && (
+        <form onSubmit={handleSave} className="space-y-8">
+          {setupComplete && editing && (
+            <Card className="border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/40">
+              <p className="text-sm text-slate-700 dark:text-slate-300">
+                You&apos;re editing integration details. Save to apply changes and return to the summary view.
+              </p>
+            </Card>
+          )}
+
+          <Card title="Integrations" description="Google Calendar and Sheets. AI phone numbers are configured on the server (Twilio / VAPI).">
+            <div className="space-y-5 pt-2">
+              <Input
+                label="Google Calendar ID"
+                value={calendarId}
+                onChange={(e) => setCalendarId(e.target.value)}
+                placeholder="owner@business.com"
+                disabled={inputDisabled}
+                required
+              />
+              <Input
+                label="Google Sheet ID"
+                value={sheetId}
+                onChange={(e) => setSheetId(e.target.value)}
+                placeholder="ID between spreadsheets/d/ and /edit"
+                disabled={inputDisabled}
+                required
+              />
+              <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled} required>
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                label="Owner personal / contact number"
+                placeholder="+1 ..."
+                value={clientPhoneNumber}
+                onChange={(e) => setClientPhoneNumber(e.target.value)}
+                disabled={inputDisabled}
+              />
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Your direct line for notifications; separate from the AI line used for inbound webhooks.
+              </p>
+            </div>
+          </Card>
+
+          <Card title="Business profile" description="How your assistant describes offerings and hours">
+            <div className="space-y-5 pt-2">
+              <Input
+                label="Business name"
+                placeholder="Displayed when useful for callers"
+                value={businessName}
+                onChange={(e) => setBusinessName(e.target.value)}
+                disabled={inputDisabled}
+              />
+              <Input
+                label="Working hours (summary)"
+                placeholder="Mon–Fri 9am–6pm EST"
+                value={workingHoursSummary}
+                onChange={(e) => setWorkingHoursSummary(e.target.value)}
+                disabled={inputDisabled}
+              />
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="slot-duration-input">
+                  Slot duration (minutes)
+                </label>
+                <input
+                  id="slot-duration-input"
+                  type="number"
+                  min={15}
+                  max={480}
+                  step={5}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                  value={slotDuration}
+                  onChange={(e) => setSlotDuration(Number(e.target.value) || 30)}
+                  disabled={inputDisabled}
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="services-text">
+                  Services / offerings (one per line or comma-separated)
+                </label>
+                <textarea
+                  id="services-text"
+                  rows={4}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                  value={servicesText}
+                  onChange={(e) => setServicesText(e.target.value)}
+                  disabled={inputDisabled}
+                  placeholder="Haircut&#10;Color treatment"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="free-text">
+                  Free-form notes for the assistant
+                </label>
+                <textarea
+                  id="free-text"
+                  rows={5}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                  value={freeText}
+                  onChange={(e) => setFreeText(e.target.value)}
+                  disabled={inputDisabled}
+                  placeholder="Parking instructions, FAQs, pronunciation…"
+                />
+              </div>
+            </div>
+          </Card>
+
+          <Card title="About your data">
+            <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
+              <li>Calendar holds real-time availability; the sheet is your booking audit trail.</li>
+              <li>Dashboard metrics are read from the server, not your browser.</li>
+            </ul>
+          </Card>
+
+          {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
+          {message && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{message}</p>}
+
+          <div className="flex flex-wrap gap-3">
+            <Button type="submit" className="w-full sm:w-auto" isLoading={saving} disabled={loading}>
+              Save settings
+            </Button>
+            {setupComplete && editing && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      applyClient(await getClient());
+                      setEditing(false);
+                      setError('');
+                      setMessage('');
+                    } catch (err) {
+                      setLoadErr(getApiErrorMessage(err));
+                    }
+                  })();
+                }}
+              >
+                Cancel
+              </Button>
+            )}
           </div>
-        </Card>
-
-        <Card title="Business profile" description="Structured fields plus free-text prompts for assistants">
-          <div className="space-y-5 pt-2">
-            <Input
-              label="Business name"
-              placeholder="Displayed when useful for callers"
-              value={businessName}
-              onChange={(e) => setBusinessName(e.target.value)}
-              disabled={inputDisabled}
-            />
-            <Input
-              label="Working hours (summary)"
-              placeholder="Mon–Fri 9am–6pm EST"
-              value={workingHoursSummary}
-              onChange={(e) => setWorkingHoursSummary(e.target.value)}
-              disabled={inputDisabled}
-            />
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="slot-duration-input">
-                Slot duration (minutes)
-              </label>
-              <input
-                id="slot-duration-input"
-                type="number"
-                min={15}
-                max={480}
-                step={5}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-                value={slotDuration}
-                onChange={(e) => setSlotDuration(Number(e.target.value) || 30)}
-                disabled={inputDisabled}
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="services-text">
-                Services / offerings (one per line or comma-separated)
-              </label>
-              <textarea
-                id="services-text"
-                rows={4}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-                value={servicesText}
-                onChange={(e) => setServicesText(e.target.value)}
-                disabled={inputDisabled}
-                placeholder="Haircut&#10;Color treatment"
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="free-text">
-                Free-form notes for the assistant
-              </label>
-              <textarea
-                id="free-text"
-                rows={5}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-                value={freeText}
-                onChange={(e) => setFreeText(e.target.value)}
-                disabled={inputDisabled}
-                placeholder="Parking instructions, FAQs, pronunciation…"
-              />
-            </div>
-          </div>
-        </Card>
-
-        <Card title="Data source">
-          <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
-            <li>Google Calendar owns availability queries and finalized appointment events.</li>
-            <li>Google Sheets stores a searchable booking log wired to your sheet integration.</li>
-            <li>Dashboard and analytics load booking history from the server only (no browser cache).</li>
-          </ul>
-        </Card>
-
-        {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
-        {message && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{message}</p>}
-
-        <Button type="submit" className="w-full sm:w-auto" isLoading={saving} disabled={locked || loading}>
-          Save settings
-        </Button>
-      </form>
+        </form>
+      )}
     </div>
   );
 };

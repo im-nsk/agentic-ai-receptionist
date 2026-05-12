@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { login as loginApi } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { useAuth } from '@/hooks/AuthContext';
@@ -12,13 +12,17 @@ export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [verifyEmailLink, setVerifyEmailLink] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { loginWithToken } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const resetOk = Boolean((location.state as { resetOk?: boolean } | null)?.resetOk);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setVerifyEmailLink('');
 
     const em = email.trim().toLowerCase();
     const pw = password.trim();
@@ -40,11 +44,14 @@ export const Login: React.FC = () => {
     } catch (error) {
       const raw = getApiErrorMessage(error);
       const lower = raw.toLowerCase();
-      if (lower.includes('verify your email')) {
+      if (lower.includes('please verify your email') || lower.includes('verify your email')) {
         setError(raw);
+        setVerifyEmailLink(em);
       } else if (lower.includes('invalid') || lower.includes('401')) {
+        setVerifyEmailLink('');
         setError('Invalid email or password.');
       } else {
+        setVerifyEmailLink('');
         setError(raw);
       }
     } finally {
@@ -64,6 +71,11 @@ export const Login: React.FC = () => {
         </div>
 
         <Card className="p-8">
+          {resetOk && (
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-50">
+              Password updated. Sign in with your new password.
+            </div>
+          )}
           <form onSubmit={handleLogin} className="space-y-4">
             <Input
               label="Email Address"
@@ -81,7 +93,22 @@ export const Login: React.FC = () => {
               onChange={(e) => setPassword(e.target.value)}
               required
             />
+            <div className="text-right">
+              <Link to="/forgot-password" className="text-sm font-medium text-blue-600 hover:text-blue-500">
+                Forgot password?
+              </Link>
+            </div>
             {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
+            {verifyEmailLink && (
+              <p className="text-sm">
+                <Link
+                  to={`/verify-email?email=${encodeURIComponent(verifyEmailLink)}`}
+                  className="font-medium text-blue-600 hover:text-blue-500"
+                >
+                  Continue to email verification
+                </Link>
+              </p>
+            )}
             <Button type="submit" className="w-full" isLoading={isLoading}>
               Sign In
             </Button>
