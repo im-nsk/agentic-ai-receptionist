@@ -180,9 +180,15 @@ export async function postSetup(payload: SetupPayload) {
   return data;
 }
 
+function coerceSheetRowId(rowId: unknown): number {
+  return Math.trunc(typeof rowId === 'number' ? rowId : Number(String(rowId)));
+}
+
 export async function getBookings() {
   const { data } = await api.get<BookingRowResponse[]>('/bookings');
-  return data;
+  return data
+    .map((r) => ({ ...r, row_id: coerceSheetRowId(r.row_id) }))
+    .filter((r) => Number.isFinite(r.row_id) && r.row_id >= 2);
 }
 
 /** Live metrics from GET /analytics (Google Sheet rows only). */
@@ -208,12 +214,20 @@ export async function getSheetAnalytics() {
 }
 
 export async function patchBooking(rowId: number, payload: BookingPatchPayload) {
-  const { data } = await api.patch<{ status: string }>(`/bookings/${rowId}`, payload);
+  const id = coerceSheetRowId(rowId);
+  if (!Number.isFinite(id) || id < 2) {
+    throw new Error('Invalid booking row reference');
+  }
+  const { data } = await api.patch<{ status: string }>(`/bookings/${id}`, payload);
   return data;
 }
 
 export async function deleteBooking(rowId: number) {
-  const { data } = await api.delete<{ status: string }>(`/bookings/${rowId}`);
+  const id = coerceSheetRowId(rowId);
+  if (!Number.isFinite(id) || id < 2) {
+    throw new Error('Invalid booking row reference');
+  }
+  const { data } = await api.delete<{ status: string }>(`/bookings/${id}`);
   return data;
 }
 
