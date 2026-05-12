@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { resetPassword } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -11,6 +12,7 @@ export const ResetPassword: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const toast = useToast();
 
   const initialEmail = useMemo(() => {
     const s = typeof (location.state as { email?: string } | null)?.email === 'string' ? (location.state as { email: string }).email : '';
@@ -21,7 +23,6 @@ export const ResetPassword: React.FC = () => {
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
@@ -30,20 +31,19 @@ export const ResetPassword: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     const em = email.trim().toLowerCase();
     const otp = code.replace(/\s/g, '');
     const pw = newPassword.trim();
     if (!em || !em.includes('@')) {
-      setError('Enter a valid email.');
+      toast.error('Enter a valid email.');
       return;
     }
     if (otp.length !== 6 || !/^\d{6}$/.test(otp)) {
-      setError('Enter the 6-digit code from your email.');
+      toast.error('Enter the 6-digit code from your email.');
       return;
     }
     if (pw.length < 6) {
-      setError('Password must be at least 6 characters.');
+      toast.error('Password must be at least 6 characters.');
       return;
     }
     setIsLoading(true);
@@ -51,7 +51,7 @@ export const ResetPassword: React.FC = () => {
       await resetPassword({ email: em, code: otp, new_password: pw });
       navigate('/login', { replace: true, state: { resetOk: true } });
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -91,7 +91,6 @@ export const ResetPassword: React.FC = () => {
               placeholder="At least 6 characters"
               autoComplete="new-password"
             />
-            {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
             <Button type="submit" className="w-full" isLoading={isLoading}>
               Update password
             </Button>

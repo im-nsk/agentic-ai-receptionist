@@ -6,7 +6,9 @@ from typing import Optional
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
 from backend.services.calendar_service import check_availability, create_event
+from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.sms_service import send_sms
 
 
@@ -21,6 +23,10 @@ def check_availability_logic(
     if not calendar_id:
         return {"available": False, "message": "Client setup incomplete"}
     duration_minutes = duration_minutes if duration_minutes > 0 else 30
+    try:
+        assert_booking_start_in_future(date, time, timezone_str)
+    except BookingDatetimeError as exc:
+        return {"available": False, "message": str(exc)}
     ok = check_availability(
         date,
         time,
@@ -49,6 +55,16 @@ def book_appointment_logic(
 ) -> dict:
     if not calendar_id or not sheet_id:
         raise HTTPException(status_code=400, detail="Client setup incomplete")
+
+    try:
+        phone = normalize_and_validate_phone(phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        assert_booking_start_in_future(date, time, timezone_str)
+    except BookingDatetimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     duration_minutes = duration_minutes if duration_minutes > 0 else 30
     ok = create_event(

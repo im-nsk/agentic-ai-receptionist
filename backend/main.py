@@ -25,7 +25,9 @@ from backend.services.auth_service import (
     hash_password,
     verify_password,
 )
+from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
+from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheets_service import (
     create_provisioned_booking_sheet,
@@ -169,9 +171,19 @@ class SetupPayload(BaseModel):
         v = value.strip()
         return v or None
 
-    @field_validator("client_phone", "free_text")
+    @field_validator("client_phone")
     @classmethod
-    def _optional_strip(cls, value: Optional[str]) -> Optional[str]:
+    def _client_phone_validate(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        v = value.strip()
+        if not v:
+            return None
+        return normalize_and_validate_phone(v)
+
+    @field_validator("free_text")
+    @classmethod
+    def _free_text_optional_strip(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
         v = value.strip()
@@ -465,6 +477,24 @@ def patch_booking_row_endpoint(
     updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if "phone" in updates and updates["phone"] is not None:
+        try:
+            updates["phone"] = normalize_and_validate_phone(str(updates["phone"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "date" in updates or "time" in updates:
+        try:
+            cells = get_data_row_cells(sheet_id, row_id)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Booking row not found") from None
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        merged_date = updates["date"] if "date" in updates else cells[3]
+        merged_time = updates["time"] if "time" in updates else cells[4]
+        try:
+            assert_booking_start_in_future(merged_date, merged_time, client.timezone or "America/New_York")
+        except BookingDatetimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         patch_booking_data_row(sheet_id, row_id, **updates)
     except LookupError:

@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/Button';
 interface MonthCalendarProps {
   selected: Date;
   onSelect: (d: Date) => void;
+  /** YYYY-MM-DD — days strictly before this are disabled (e.g. tenant-local today). */
+  minSelectableDateIso?: string;
 }
 
 const weekday = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -15,7 +17,7 @@ function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
 
-export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect }) => {
+export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect, minSelectableDateIso }) => {
   const [visible, setVisible] = useState(() => startOfMonth(selected));
 
   const { label, cells } = useMemo(() => {
@@ -94,17 +96,23 @@ export const MonthCalendar: React.FC<MonthCalendarProps> = ({ selected, onSelect
           const iso = toISODateLocal(date);
           const isSelected = iso === selectedIso;
           const isToday = iso === todayIso;
+          const isBeforeMin = minSelectableDateIso != null && minSelectableDateIso !== '' && iso < minSelectableDateIso;
           return (
             <button
               key={`${iso}-${inMonth}`}
               type="button"
-              onClick={() => onSelect(date)}
+              disabled={isBeforeMin}
+              onClick={() => {
+                if (isBeforeMin) return;
+                onSelect(date);
+              }}
               className={cn(
                 'flex h-9 items-center justify-center rounded-lg text-sm font-medium transition-colors',
                 !inMonth && 'text-slate-300 dark:text-slate-600',
                 inMonth && 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800',
                 isSelected && 'bg-blue-600 text-white shadow-md hover:bg-blue-600 dark:hover:bg-blue-600',
-                !isSelected && isToday && inMonth && 'ring-1 ring-blue-500/50'
+                !isSelected && isToday && inMonth && 'ring-1 ring-blue-500/50',
+                isBeforeMin && 'cursor-not-allowed opacity-35 hover:bg-transparent dark:hover:bg-transparent'
               )}
             >
               {date.getDate()}
