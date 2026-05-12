@@ -10,7 +10,7 @@ import { useAuth } from '@/hooks/AuthContext';
 import { getClientIdFromToken } from '@/utils/auth';
 import { toISODateLocal } from '@/utils/date';
 import { phoneFieldError, normalizeAndValidatePhone } from '@/utils/phone';
-import { WORK_TIME_SLOTS } from '@/utils/slots';
+import { buildBookingDaySlots } from '@/utils/slots';
 import { isSlotInPastForTenant, todayYmdInTimeZone } from '@/utils/tenantTime';
 
 export const Booking: React.FC = () => {
@@ -32,6 +32,19 @@ export const Booking: React.FC = () => {
   const [message, setMessage] = useState<string>('');
 
   const minSelectableYmd = useMemo(() => todayYmdInTimeZone(tenantTz), [tenantTz]);
+
+  const timeSlots = useMemo(
+    () => buildBookingDaySlots(profile?.slot_duration ?? 30, profile?.working_hours ?? null),
+    [profile?.slot_duration, profile?.working_hours]
+  );
+
+  const slotsLayoutKey = useMemo(() => timeSlots.join('|'), [timeSlots]);
+
+  useEffect(() => {
+    setSelectedTime(null);
+    setAvailable(null);
+    setMessage('');
+  }, [slotsLayoutKey]);
 
   useEffect(() => {
     const cur = toISODateLocal(selectedDate);
@@ -151,9 +164,17 @@ export const Booking: React.FC = () => {
         </Card>
 
         <div className="space-y-6 lg:col-span-7 xl:col-span-8">
-          <Card title="Time slots" description="Check availability before booking">
+          <Card
+            title="Time slots"
+            description={`${profile?.slot_duration ?? 30}-minute grid from your daily window in Settings (timezone: ${tenantTz}).`}
+          >
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
-              {WORK_TIME_SLOTS.map((slot) => {
+              {timeSlots.length === 0 ? (
+                <p className="col-span-full text-sm text-slate-600 dark:text-slate-400">
+                  No slots for this configuration — widen your daily booking window or shorten slot duration in Settings.
+                </p>
+              ) : (
+                timeSlots.map((slot) => {
                 const past = isSlotInPastForTenant(dateIso, slot, tenantTz);
                 return (
                   <button
@@ -176,7 +197,8 @@ export const Booking: React.FC = () => {
                     {slot}
                   </button>
                 );
-              })}
+              })
+              )}
             </div>
             {checking && <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">Checking slot...</p>}
             {selectedTime && !checking && message && (

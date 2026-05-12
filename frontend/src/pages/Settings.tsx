@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getClient, postSetup, type ClientResponse } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { useToast } from '@/components/toast/ToastContext';
+import { useAuth } from '@/hooks/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { phoneFieldError } from '@/utils/phone';
 import { COMMON_TIMEZONES, DEFAULT_TIMEZONE } from '@/utils/timezones';
+import { dailyWindowMinutesFromWorkingHours, minutesToTimeInputValue } from '@/utils/slots';
 
 function servicesToLines(services: string[]): string {
   return services.length ? services.join('\n') : '';
@@ -28,14 +30,26 @@ function workingHoursToSummary(wh: ClientResponse['working_hours']): string {
   return '';
 }
 
-function summaryToWorkingHoursPayload(summary: string): Record<string, unknown> {
-  const t = summary.trim();
-  if (!t) return {};
-  return { summary: t };
+function extractDayWindow(wh: ClientResponse['working_hours']): { start: string; end: string } {
+  const { startMin, endMin } = dailyWindowMinutesFromWorkingHours(wh);
+  return { start: minutesToTimeInputValue(startMin), end: minutesToTimeInputValue(endMin) };
+}
+
+function buildWorkingHoursForSave(summary: string, dayStart: string, dayEnd: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    window: {
+      start: (dayStart || '09:00').trim() || '09:00',
+      end: (dayEnd || '18:00').trim() || '18:00',
+    },
+  };
+  const s = summary.trim();
+  if (s) out.summary = s;
+  return out;
 }
 
 export const Settings: React.FC = () => {
   const toast = useToast();
+  const { refreshProfile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
 
@@ -45,6 +59,8 @@ export const Settings: React.FC = () => {
   const [clientPhoneNumber, setClientPhoneNumber] = useState('');
   const [businessName, setBusinessName] = useState('');
   const [workingHoursSummary, setWorkingHoursSummary] = useState('');
+  const [dayWindowStart, setDayWindowStart] = useState('09:00');
+  const [dayWindowEnd, setDayWindowEnd] = useState('18:00');
   const [slotDuration, setSlotDuration] = useState(30);
   const [servicesText, setServicesText] = useState('');
   const [freeText, setFreeText] = useState('');
@@ -61,6 +77,9 @@ export const Settings: React.FC = () => {
     setClientPhoneNumber((c.client_phone || '').trim());
     setBusinessName((c.business_name || '').trim());
     setWorkingHoursSummary(workingHoursToSummary(c.working_hours));
+    const dw = extractDayWindow(c.working_hours);
+    setDayWindowStart(dw.start);
+    setDayWindowEnd(dw.end);
     setSlotDuration(typeof c.slot_duration === 'number' && c.slot_duration > 0 ? c.slot_duration : 30);
     setServicesText(servicesToLines(c.services ?? []));
     setFreeText((c.free_text || '').trim());
@@ -117,6 +136,20 @@ export const Settings: React.FC = () => {
       toast.error(phoneErr || 'Enter a valid owner phone number.');
       return;
     }
+    const toMin = (t: string) => {
+      const p = t.trim().split(':');
+      if (p.length < 2) return null;
+      const h = parseInt(p[0], 10);
+      const mm = parseInt(p[1], 10);
+      if (Number.isNaN(h) || Number.isNaN(mm)) return null;
+      return h * 60 + mm;
+    };
+    const ws = toMin(dayWindowStart);
+    const we = toMin(dayWindowEnd);
+    if (ws == null || we == null || we <= ws) {
+      toast.error('Daily booking window end must be after start.');
+      return;
+    }
     try {
       setSaving(true);
       await postSetup({
@@ -124,7 +157,7 @@ export const Settings: React.FC = () => {
         timezone: tz,
         client_phone: ownerPhone,
         business_name: businessName.trim() || null,
-        working_hours: summaryToWorkingHoursPayload(workingHoursSummary),
+        working_hours: buildWorkingHoursForSave(workingHoursSummary, dayWindowStart, dayWindowEnd),
         slot_duration: slotDuration,
         services: parseServices,
         free_text: freeText.trim() || null,
@@ -133,6 +166,7 @@ export const Settings: React.FC = () => {
       setSetupComplete(true);
       setEditing(false);
       await refresh();
+      await refreshProfile();
     } catch (err) {
       toast.error(getApiErrorMessage(err));
     } finally {
@@ -261,6 +295,39 @@ export const Settings: React.FC = () => {
                 onChange={(e) => setWorkingHoursSummary(e.target.value)}
                 disabled={inputDisabled}
               />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="day-window-start">
+                    Daily booking window (start)
+                  </label>
+                  <input
+                    id="day-window-start"
+                    type="time"
+                    step={60}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                    value={dayWindowStart}
+                    onChange={(e) => setDayWindowStart(e.target.value)}
+                    disabled={inputDisabled}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="day-window-end">
+                    Daily booking window (end)
+                  </label>
+                  <input
+                    id="day-window-end"
+                    type="time"
+                    step={60}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20 disabled:pointer-events-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                    value={dayWindowEnd}
+                    onChange={(e) => setDayWindowEnd(e.target.value)}
+                    disabled={inputDisabled}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                The public Booking page lists times inside this window, spaced by slot duration. The end time is exclusive (18:00 means slots only before 6:00 PM).
+              </p>
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-900 dark:text-slate-50" htmlFor="slot-duration-input">
                   Slot duration (minutes)

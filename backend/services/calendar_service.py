@@ -2,12 +2,14 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from dateutil import parser
 
+from backend.services.booking_window import daily_booking_window_minutes
 from backend.services.sheets_service import save_to_sheet
 
 
@@ -44,13 +46,22 @@ def is_valid_slot(dt, duration_minutes: int = 30):
     return mins % duration_minutes == 0 and dt.second == 0
 
 
-def is_within_working_hours(dt):
-    return 9 <= dt.hour < 18
+def is_within_booking_window(dt, open_mins: int, close_mins: int) -> bool:
+    """Half-open [open_mins, close_mins) in the booking timezone wall clock."""
+    mins = dt.hour * 60 + dt.minute
+    return open_mins <= mins < close_mins
 
 
 # ---------------- CHECK AVAILABILITY ---------------- #
 
-def check_availability(date, time, calendar_id, timezone, duration_minutes: int = 30):
+def check_availability(
+    date,
+    time,
+    calendar_id,
+    timezone,
+    duration_minutes: int = 30,
+    working_hours: Optional[Any] = None,
+):
 
     booking_dt = parse_datetime(date, time, timezone)
 
@@ -71,8 +82,8 @@ def check_availability(date, time, calendar_id, timezone, duration_minutes: int 
     if not is_valid_slot(booking_dt, duration_minutes):
         return False
 
-    # ❌ Outside working hours
-    if not is_within_working_hours(booking_dt):
+    open_m, close_m = daily_booking_window_minutes(working_hours)
+    if not is_within_booking_window(booking_dt, open_m, close_m):
         return False
 
     events = service.events().list(
@@ -97,6 +108,7 @@ def create_event(
     duration_minutes: int = 30,
     source: str = "web",
     notes: str = "",
+    working_hours: Optional[Any] = None,
 ):
     try:
         if not calendar_id or not sheet_id:
@@ -106,7 +118,14 @@ def create_event(
 
         duration_minutes = duration_minutes or 30
 
-        if not check_availability(date, time, calendar_id, timezone, duration_minutes=duration_minutes):
+        if not check_availability(
+            date,
+            time,
+            calendar_id,
+            timezone,
+            duration_minutes=duration_minutes,
+            working_hours=working_hours,
+        ):
             return False
 
         start_time = booking_dt

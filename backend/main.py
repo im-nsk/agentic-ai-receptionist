@@ -599,6 +599,7 @@ def availability(
             calendar_id=client.calendar_id,
             timezone_str=client.timezone or "America/New_York",
             duration_minutes=_client_slot_minutes(client),
+            working_hours=client.working_hours,
         )
     except HTTPException:
         raise
@@ -632,6 +633,7 @@ def book_web(
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
             db=db,
+            working_hours=client.working_hours,
         )
 
     except HTTPException:
@@ -683,6 +685,7 @@ def vapi_check(
         calendar_id=calendar_id,
         timezone_str=timezone,
         duration_minutes=_client_slot_minutes(client),
+        working_hours=client.working_hours,
     )
 
 
@@ -724,6 +727,7 @@ def vapi_book(
             db=db,
             source="vapi",
             notes=notes,
+            working_hours=client.working_hours,
         )
 
     except HTTPException:

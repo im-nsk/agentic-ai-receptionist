@@ -64,34 +64,6 @@ def migrate_schema(engine: Engine) -> None:
     with engine.begin() as conn:
         _backfill_clients(conn, cols, dialect, before)
 
-    _ensure_bookings_table(engine, dialect)
-
-
-def _ensure_bookings_table(engine: Engine, dialect: str) -> None:
-    insp = inspect(engine)
-    if insp.has_table("bookings"):
-        return
-
-    if dialect != "postgresql":
-        return
-
-    create_table = """
-    CREATE TABLE IF NOT EXISTS bookings (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        date TEXT NOT NULL,
-        time TEXT NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-    """
-    create_idx = "CREATE INDEX IF NOT EXISTS ix_bookings_client_id ON bookings (client_id)"
-    with engine.begin() as conn:
-        conn.execute(text(create_table))
-        conn.execute(text(create_idx))
-
 
 def _backfill_clients(conn, cols: set, dialect: str, before: set) -> None:
     if "email_verified" in cols and dialect != "postgresql":
