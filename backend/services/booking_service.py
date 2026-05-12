@@ -1,7 +1,7 @@
 """Shared booking + availability logic for web (/book-appointment) and VAPI."""
 
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ def check_availability_logic(
     calendar_id: Optional[str],
     timezone_str: str,
     duration_minutes: int,
+    working_hours: Optional[Any] = None,
 ) -> dict:
     if not calendar_id:
         return {"available": False, "message": "Client setup incomplete"}
@@ -33,6 +34,7 @@ def check_availability_logic(
         calendar_id=calendar_id,
         timezone=timezone_str,
         duration_minutes=duration_minutes,
+        working_hours=working_hours,
     )
     return {"available": ok, "message": "Available" if ok else "Slot not available"}
 
@@ -52,6 +54,7 @@ def book_appointment_logic(
     db: Session,
     source: str = "web",
     notes: str = "",
+    working_hours: Optional[Any] = None,
 ) -> dict:
     if not calendar_id or not sheet_id:
         raise HTTPException(status_code=400, detail="Client setup incomplete")
@@ -78,6 +81,7 @@ def book_appointment_logic(
         duration_minutes=duration_minutes,
         source=source,
         notes=notes,
+        working_hours=working_hours,
     )
 
     if not ok:
