@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from backend.db.database import SessionLocal, engine
 from backend.db.migrate import migrate_schema
 from backend.models.booking import BookingRequest
-from backend.models.booking_record import BookingRecord
 from backend.models.client import Client
 from backend.services.auth_service import (
     create_access_token,
@@ -28,6 +27,11 @@ from backend.services.auth_service import (
 )
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
 from backend.services.email_service import send_email_otp, send_password_reset_email
+from backend.services.sheets_service import (
+    create_provisioned_booking_sheet,
+    ensure_booking_sheet_headers,
+    list_booking_rows_for_dashboard,
+)
 
 # ---------------- INIT ---------------- #
 app = FastAPI()
@@ -137,7 +141,7 @@ class SetupPayload(BaseModel):
     client_phone: Optional[str] = None
 
     calendar_id: str
-    sheet_id: str
+    sheet_id: Optional[str] = None
     timezone: str
 
     business_name: str
@@ -146,13 +150,21 @@ class SetupPayload(BaseModel):
     services: List[Any]
     free_text: Optional[str] = None
 
-    @field_validator("calendar_id", "sheet_id", "timezone", "business_name")
+    @field_validator("calendar_id", "timezone", "business_name")
     @classmethod
     def _required_non_empty(cls, value: str) -> str:
         v = value.strip()
         if not v:
             raise ValueError("must not be empty")
         return v
+
+    @field_validator("sheet_id")
+    @classmethod
+    def _sheet_id_optional(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        v = value.strip()
+        return v or None
 
     @field_validator("client_phone", "free_text")
     @classmethod
@@ -355,9 +367,33 @@ def setup(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
+    sheet_in = (payload.sheet_id or "").strip() if payload.sheet_id else ""
+    if sheet_in:
+        try:
+            ensure_booking_sheet_headers(sheet_in)
+        except Exception as e:
+            print("SETUP SHEET HEAL:", repr(e))
+            raise HTTPException(status_code=400, detail="Invalid or inaccessible Google Sheet") from e
+        client.sheet_id = sheet_in
+    elif not (client.sheet_id or "").strip():
+        try:
+            title = payload.business_name.strip() or (client.name or "Bookings")
+            client.sheet_id = create_provisioned_booking_sheet(title)
+        except Exception as e:
+            print("SHEET PROVISION ERROR:", repr(e))
+            raise HTTPException(
+                status_code=500,
+                detail="Could not create booking sheet. Check Google credentials and Drive/Sheets API access.",
+            ) from e
+    else:
+        try:
+            ensure_booking_sheet_headers((client.sheet_id or "").strip())
+        except Exception as e:
+            print("SETUP SHEET HEAL:", repr(e))
+            raise HTTPException(status_code=400, detail="Could not validate booking sheet headers") from e
+
     client.client_phone = payload.client_phone
     client.calendar_id = payload.calendar_id
-    client.sheet_id = payload.sheet_id
     client.timezone = payload.timezone
     client.business_name = payload.business_name
     client.working_hours = payload.working_hours
@@ -383,24 +419,11 @@ def list_bookings(
         raise HTTPException(status_code=404, detail="Client not found")
     if not ((client.calendar_id or "").strip() and (client.sheet_id or "").strip()):
         return []
-    rows = (
-        db.query(BookingRecord)
-        .filter(BookingRecord.client_id == cid)
-        .order_by(BookingRecord.created_at.desc())
-        .all()
-    )
-    return [
-        {
-            "id": str(r.id),
-            "name": r.name,
-            "phone": r.phone,
-            "date": r.date,
-            "time": r.time,
-            "status": r.status,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in rows
-    ]
+    try:
+        return list_booking_rows_for_dashboard((client.sheet_id or "").strip())
+    except Exception as e:
+        print("BOOKINGS READ:", repr(e))
+        return []
 
 
 # ---------------- AVAILABILITY / BOOK (JWT) ---------------- #
@@ -515,6 +538,8 @@ def vapi_book(
         phone = _vapi_str(payload, "phone")
         date = _vapi_str(payload, "date")
         time = _vapi_str(payload, "time")
+        notes_raw = payload.get("notes")
+        notes = str(notes_raw).strip()[:4000] if notes_raw is not None else ""
 
         return book_appointment_logic(
             client_id=client.id,
@@ -528,6 +553,8 @@ def vapi_book(
             duration_minutes=_client_slot_minutes(client),
             background_tasks=background_tasks,
             db=db,
+            source="vapi",
+            notes=notes,
         )
 
     except HTTPException:
