@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { login as loginApi } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { useAuth } from '@/hooks/AuthContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Card } from '@/components/ui/Card';
@@ -11,27 +12,34 @@ import { Button } from '@/components/ui/Button';
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [verifyEmailLink, setVerifyEmailLink] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { loginWithToken } = useAuth();
+  const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const resetOk = Boolean((location.state as { resetOk?: boolean } | null)?.resetOk);
+  const resetToastShown = useRef(false);
+
+  useEffect(() => {
+    if (!resetOk || resetToastShown.current) return;
+    resetToastShown.current = true;
+    toast.success('Password updated. Sign in with your new password.');
+    navigate('/login', { replace: true, state: {} });
+  }, [resetOk, navigate, toast]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     setVerifyEmailLink('');
 
     const em = email.trim().toLowerCase();
     const pw = password.trim();
     if (!em || !pw) {
-      setError('Enter email and password.');
+      toast.error('Enter email and password.');
       return;
     }
     if (!em.includes('@')) {
-      setError('Enter a valid email.');
+      toast.error('Enter a valid email.');
       return;
     }
 
@@ -45,14 +53,14 @@ export const Login: React.FC = () => {
       const raw = getApiErrorMessage(error);
       const lower = raw.toLowerCase();
       if (lower.includes('please verify your email') || lower.includes('verify your email')) {
-        setError(raw);
+        toast.error(raw);
         setVerifyEmailLink(em);
       } else if (lower.includes('invalid') || lower.includes('401')) {
         setVerifyEmailLink('');
-        setError('Invalid email or password.');
+        toast.error('Invalid email or password.');
       } else {
         setVerifyEmailLink('');
-        setError(raw);
+        toast.error(raw);
       }
     } finally {
       setIsLoading(false);
@@ -71,11 +79,6 @@ export const Login: React.FC = () => {
         </div>
 
         <Card className="p-8">
-          {resetOk && (
-            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-50">
-              Password updated. Sign in with your new password.
-            </div>
-          )}
           <form onSubmit={handleLogin} className="space-y-4">
             <Input
               label="Email Address"
@@ -98,7 +101,6 @@ export const Login: React.FC = () => {
                 Forgot password?
               </Link>
             </div>
-            {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
             {verifyEmailLink && (
               <p className="text-sm">
                 <Link

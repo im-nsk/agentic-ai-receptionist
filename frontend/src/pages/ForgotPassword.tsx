@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { forgotPassword } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -9,25 +10,25 @@ import { Input } from '@/components/ui/Input';
 
 export const ForgotPassword: React.FC = () => {
   const [email, setEmail] = useState('');
-  const [error, setError] = useState('');
   const [done, setDone] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const toast = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     const em = email.trim().toLowerCase();
     if (!em || !em.includes('@')) {
-      setError('Enter a valid email.');
+      toast.error('Enter a valid email.');
       return;
     }
     setIsLoading(true);
     try {
       await forgotPassword({ email: em });
       setDone(true);
+      toast.info('If an account exists for that email, you will receive a code shortly.');
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -46,7 +47,7 @@ export const ForgotPassword: React.FC = () => {
         <Card>
           {done ? (
             <div className="space-y-4 pt-2 text-center text-sm text-slate-600 dark:text-slate-400">
-              <p>If an account exists for that email, you&apos;ll receive a code shortly. It expires in 5 minutes.</p>
+              <p>It expires in 5 minutes.</p>
               <Button
                 type="button"
                 className="w-full"
@@ -67,7 +68,6 @@ export const ForgotPassword: React.FC = () => {
                 placeholder="you@business.com"
                 autoComplete="email"
               />
-              {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
               <Button type="submit" className="w-full" isLoading={isLoading}>
                 Send reset code
               </Button>

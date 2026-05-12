@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { signup as signupApi } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -9,29 +10,28 @@ import { Input } from '@/components/ui/Input';
 
 export const Signup: React.FC = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     const n = name.trim();
     const em = email.trim().toLowerCase();
     const pw = password.trim();
 
     if (!n || !em || !pw) {
-      setError('Fill in all fields.');
+      toast.error('Fill in all fields.');
       return;
     }
     if (!/\S+@\S+\.\S+/.test(em)) {
-      setError('Enter a valid email.');
+      toast.error('Enter a valid email.');
       return;
     }
     if (pw.length < 6) {
-      setError('Password must be at least 6 characters.');
+      toast.error('Password must be at least 6 characters.');
       return;
     }
 
@@ -50,7 +50,7 @@ export const Signup: React.FC = () => {
     } catch (err) {
       const raw = getApiErrorMessage(err);
       const msg = raw.toLowerCase();
-      setError(
+      toast.error(
         msg.includes('exists') || msg.includes('already') || msg.includes('registered')
           ? 'That email is already registered.'
           : raw
@@ -84,7 +84,6 @@ export const Signup: React.FC = () => {
               onChange={(ev) => setPassword(ev.target.value)}
               placeholder="At least 6 characters"
             />
-            {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
             <Button type="submit" className="w-full" isLoading={isLoading}>
               Create account
             </Button>

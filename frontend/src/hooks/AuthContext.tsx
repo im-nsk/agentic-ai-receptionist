@@ -7,6 +7,8 @@ interface ProfileSummary {
   name: string;
   minutes_used: number;
   plan_limit: number;
+  /** IANA timezone from client setup; used for booking validation in the UI. */
+  timezone: string;
 }
 
 interface AuthContextType {
@@ -43,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         name: client.name,
         minutes_used: client.minutes_used ?? 0,
         plan_limit: client.plan_limit ?? 0,
+        timezone: (client.timezone || 'America/New_York').trim() || 'America/New_York',
       });
     } catch (e) {
       setProfile(null);

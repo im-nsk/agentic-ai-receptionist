@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { useToast } from '@/components/toast/ToastContext';
 import { AuthProvider, useAuth } from '@/hooks/AuthContext';
 import { MainLayout } from '@/layout/MainLayout';
 import { getToken, isTokenExpired } from '@/utils/auth';
@@ -25,7 +26,17 @@ function Spinner() {
 
 function ProtectedShell() {
   const { profileLoading, profileError, refreshProfile } = useAuth();
+  const toast = useToast();
   const token = getToken();
+  const lastProfileErr = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (profileError && profileError !== lastProfileErr.current) {
+      lastProfileErr.current = profileError;
+      toast.error(profileError);
+    }
+    if (!profileError) lastProfileErr.current = null;
+  }, [profileError, toast]);
 
   if (!token || isTokenExpired(token)) {
     return <Navigate to="/login" replace />;
@@ -37,21 +48,18 @@ function ProtectedShell() {
 
   return (
     <>
+      <Outlet />
       {profileError && (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 sm:px-6 lg:px-8">
-            <span>{profileError}</span>
-            <button
-              type="button"
-              onClick={() => void refreshProfile()}
-              className="rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-900 hover:bg-amber-200 dark:bg-amber-900/60 dark:text-amber-50 dark:hover:bg-amber-800/80"
-            >
-              Retry
-            </button>
-          </div>
+        <div className="fixed bottom-4 left-4 z-[150]">
+          <button
+            type="button"
+            onClick={() => void refreshProfile()}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-md hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+          >
+            Retry profile
+          </button>
         </div>
       )}
-      <Outlet />
     </>
   );
 }

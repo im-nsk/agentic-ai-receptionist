@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getClient, postSetup, type ClientResponse } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { phoneFieldError } from '@/utils/phone';
 import { COMMON_TIMEZONES, DEFAULT_TIMEZONE } from '@/utils/timezones';
 
 function servicesToLines(services: string[]): string {
@@ -33,8 +35,9 @@ function summaryToWorkingHoursPayload(summary: string): Record<string, unknown> 
 }
 
 export const Settings: React.FC = () => {
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
-  const [loadErr, setLoadErr] = useState('');
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const [calendarId, setCalendarId] = useState('');
   const [linkedSheetId, setLinkedSheetId] = useState('');
@@ -50,8 +53,6 @@ export const Settings: React.FC = () => {
   const [editing, setEditing] = useState(true);
 
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
 
   const applyClient = useCallback((c: ClientResponse) => {
     setCalendarId((c.calendar_id || '').trim());
@@ -70,16 +71,17 @@ export const Settings: React.FC = () => {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setLoadErr('');
+    setLoadFailed(false);
     try {
       applyClient(await getClient());
     } catch (err) {
-      setLoadErr(getApiErrorMessage(err));
+      setLoadFailed(true);
       setEditing(true);
+      toast.error(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [applyClient]);
+  }, [applyClient, toast]);
 
   useEffect(() => {
     void refresh();
@@ -98,22 +100,21 @@ export const Settings: React.FC = () => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setMessage('');
     const cal = calendarId.trim();
     const tz = timezone.trim();
 
     if (!cal || !tz) {
-      setError('Calendar ID and timezone are required.');
+      toast.error('Calendar ID and timezone are required.');
       return;
     }
     if (!cal.includes('@')) {
-      setError('Calendar ID must look like an email.');
+      toast.error('Calendar ID must look like an email.');
       return;
     }
     const ownerPhone = clientPhoneNumber.trim();
-    if (!ownerPhone || ownerPhone.replace(/\D/g, '').length < 10) {
-      setError('Owner / personal mobile needs 10+ digits for notifications and CRM-style records.');
+    const phoneErr = phoneFieldError(ownerPhone);
+    if (!ownerPhone || phoneErr) {
+      toast.error(phoneErr || 'Enter a valid owner phone number.');
       return;
     }
     try {
@@ -128,12 +129,12 @@ export const Settings: React.FC = () => {
         services: parseServices,
         free_text: freeText.trim() || null,
       });
-      setMessage('Settings saved.');
+      toast.success('Settings saved.');
       setSetupComplete(true);
       setEditing(false);
       await refresh();
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -148,10 +149,10 @@ export const Settings: React.FC = () => {
         </p>
       </div>
 
-      {loadErr && (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-50">
-          {loadErr}{' '}
-          <button type="button" onClick={() => void refresh()} className="underline">
+      {loadFailed && (
+        <p className="text-sm text-slate-600 dark:text-slate-400">
+          Couldn&apos;t load settings.{' '}
+          <button type="button" onClick={() => void refresh()} className="font-medium text-blue-600 underline hover:text-blue-500">
             Retry
           </button>
         </p>
@@ -314,9 +315,6 @@ export const Settings: React.FC = () => {
             </ul>
           </Card>
 
-          {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
-          {message && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{message}</p>}
-
           <div className="flex flex-wrap gap-3">
             <Button type="submit" className="w-full sm:w-auto" isLoading={saving} disabled={loading}>
               Save settings
@@ -330,10 +328,8 @@ export const Settings: React.FC = () => {
                     try {
                       applyClient(await getClient());
                       setEditing(false);
-                      setError('');
-                      setMessage('');
                     } catch (err) {
-                      setLoadErr(getApiErrorMessage(err));
+                      toast.error(getApiErrorMessage(err));
                     }
                   })();
                 }}

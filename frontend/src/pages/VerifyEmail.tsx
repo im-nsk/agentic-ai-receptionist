@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { resendSignupOtp, verifyOtp } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { useAuth } from '@/hooks/AuthContext';
 import { MinimalPage } from '@/layout/MinimalPage';
 import { Button } from '@/components/ui/Button';
@@ -14,6 +15,7 @@ export const VerifyEmail: React.FC = () => {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { loginWithToken } = useAuth();
+  const toast = useToast();
 
   const locState = location.state as { email?: string; freshSignup?: boolean } | null;
 
@@ -25,10 +27,8 @@ export const VerifyEmail: React.FC = () => {
   }, [locState?.email, searchParams]);
 
   const [code, setCode] = useState('');
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
-  const [resendMsg, setResendMsg] = useState('');
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [, setTick] = useState(0);
 
@@ -61,10 +61,9 @@ export const VerifyEmail: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     const otp = code.replace(/\s/g, '');
     if (otp.length !== 6 || !/^\d{6}$/.test(otp)) {
-      setError('Enter the 6-digit code.');
+      toast.error('Enter the 6-digit code.');
       return;
     }
     setIsLoading(true);
@@ -75,7 +74,7 @@ export const VerifyEmail: React.FC = () => {
       loginWithToken(res.access_token);
       navigate('/dashboard', { replace: true });
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -83,19 +82,17 @@ export const VerifyEmail: React.FC = () => {
 
   const handleResend = useCallback(async () => {
     if (!email || coolLeft > 0 || resendLoading) return;
-    setResendMsg('');
-    setError('');
     setResendLoading(true);
     try {
       await resendSignupOtp({ email });
-      setResendMsg('A new code was sent. Check your inbox.');
+      toast.success('A new code was sent. Check your inbox.');
       setCooldownUntil(Date.now() + 30_000);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      toast.error(getApiErrorMessage(err));
     } finally {
       setResendLoading(false);
     }
-  }, [email, coolLeft, resendLoading]);
+  }, [email, coolLeft, resendLoading, toast]);
 
   if (!email) return null;
 
@@ -127,8 +124,6 @@ export const VerifyEmail: React.FC = () => {
                 className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-center text-2xl font-mono tracking-[0.4em] text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/25 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
               />
             </div>
-            {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}
-            {resendMsg && <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300">{resendMsg}</p>}
             <Button type="submit" className="w-full" isLoading={isLoading}>
               Verify and continue
             </Button>

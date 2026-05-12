@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { deleteBooking, getBookings, getClient, patchBooking } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
+import { useToast } from '@/components/toast/ToastContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Table, TableCell, TableRow } from '@/components/ui/Table';
-import { BarChart3, Calendar, Clock, MoreHorizontal, Phone, Target } from 'lucide-react';
 import { useAuth } from '@/hooks/AuthContext';
+import { BarChart3, Calendar, Clock, MoreHorizontal, Phone, Target } from 'lucide-react';
 import {
   aggregateLast7DayCountsFromBookings,
   successRateFromBookings,
   sumConfirmedBookings,
 } from '@/utils/bookingStats';
+import { isBookingInstantInPast } from '@/utils/tenantTime';
 
 function barHeightClass(count: number, max: number): string {
   if (max <= 0 || count <= 0) return 'h-2';
@@ -34,12 +36,13 @@ function statusPillClass(status: string): string {
 
 export const Dashboard: React.FC = () => {
   const { profile } = useAuth();
+  const toast = useToast();
+  const tenantTz = profile?.timezone?.trim() || 'America/New_York';
+
   const [bookings, setBookings] = useState<Awaited<ReturnType<typeof getBookings>>>([]);
   const [setupComplete, setSetupComplete] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
   const [rowBusy, setRowBusy] = useState<number | null>(null);
-  const [actionError, setActionError] = useState('');
   const [openMenuRow, setOpenMenuRow] = useState<number | null>(null);
   const [rescheduleRowId, setRescheduleRowId] = useState<number | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState('');
@@ -47,18 +50,17 @@ export const Dashboard: React.FC = () => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setLoadError('');
     try {
       const [rows, client] = await Promise.all([getBookings(), getClient()]);
       setBookings(rows);
       setSetupComplete(Boolean(client.setup_complete));
     } catch (e) {
-      setLoadError(getApiErrorMessage(e));
+      toast.error(getApiErrorMessage(e));
       setBookings([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     void load();
@@ -83,7 +85,6 @@ export const Dashboard: React.FC = () => {
       : 'No bookings yet';
 
   const beginReschedule = (row: (typeof bookings)[0]) => {
-    setActionError('');
     setOpenMenuRow(null);
     setRescheduleRowId(row.row_id);
     setRescheduleDate(row.date || '');
@@ -95,17 +96,21 @@ export const Dashboard: React.FC = () => {
     const d = rescheduleDate.trim();
     const t = rescheduleTime.trim();
     if (!d || !t) {
-      setActionError('Enter both date and time to reschedule.');
+      toast.error('Enter both date and time to reschedule.');
+      return;
+    }
+    if (isBookingInstantInPast(d, t, tenantTz)) {
+      toast.error('Choose a future date and time in your business timezone.');
       return;
     }
     setRowBusy(rescheduleRowId);
-    setActionError('');
     try {
       await patchBooking(rescheduleRowId, { date: d, time: t });
       setRescheduleRowId(null);
+      toast.success('Booking updated in your sheet.');
       await load();
     } catch (e) {
-      setActionError(getApiErrorMessage(e));
+      toast.error(getApiErrorMessage(e));
     } finally {
       setRowBusy(null);
     }
@@ -114,13 +119,13 @@ export const Dashboard: React.FC = () => {
   const handleCancel = async (rowId: number) => {
     if (!window.confirm('Mark this booking as cancelled in the sheet?')) return;
     setRowBusy(rowId);
-    setActionError('');
     setOpenMenuRow(null);
     try {
       await patchBooking(rowId, { status: 'cancelled' });
+      toast.success('Booking marked cancelled in your sheet.');
       await load();
     } catch (e) {
-      setActionError(getApiErrorMessage(e));
+      toast.error(getApiErrorMessage(e));
     } finally {
       setRowBusy(null);
     }
@@ -129,14 +134,14 @@ export const Dashboard: React.FC = () => {
   const handleDelete = async (rowId: number) => {
     if (!window.confirm('Permanently delete this row from Google Sheets? This cannot be undone.')) return;
     setRowBusy(rowId);
-    setActionError('');
     setOpenMenuRow(null);
     try {
       await deleteBooking(rowId);
       if (rescheduleRowId === rowId) setRescheduleRowId(null);
+      toast.success('Row removed from your sheet.');
       await load();
     } catch (e) {
-      setActionError(getApiErrorMessage(e));
+      toast.error(getApiErrorMessage(e));
     } finally {
       setRowBusy(null);
     }
@@ -160,21 +165,6 @@ export const Dashboard: React.FC = () => {
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
-
-      {loadError && (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-50">
-          {loadError}{' '}
-          <button type="button" onClick={() => void load()} className="underline">
-            Retry
-          </button>
-        </p>
-      )}
-
-      {actionError && (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-100">
-          {actionError}
-        </p>
-      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="flex gap-4">
@@ -328,7 +318,7 @@ export const Dashboard: React.FC = () => {
         <Card title="Reschedule booking" description="Updates the Google Sheet row (calendar event is not moved automatically).">
           <div className="mt-4 grid max-w-md gap-4 sm:grid-cols-2">
             <Input label="Date (YYYY-MM-DD)" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)} />
-            <Input label="Time" placeholder="14:30" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)} />
+            <Input label="Time" placeholder="14:30 or 2:30 PM" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button type="button" isLoading={rowBusy === rescheduleRowId} onClick={() => void submitReschedule()}>
