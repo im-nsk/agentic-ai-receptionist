@@ -185,6 +185,28 @@ export async function getBookings() {
   return data;
 }
 
+/** Live metrics from GET /analytics (Google Sheet rows only). */
+export interface SheetAnalyticsResponse {
+  source: string;
+  timezone: string;
+  integrations_ready: boolean;
+  rows_read_ok: boolean;
+  total_bookings: number;
+  confirmed_bookings: number;
+  cancelled_bookings: number;
+  bookings_today: number;
+  bookings_this_week: number;
+  success_rate_percent: number | null;
+  busiest_day: { label: string; count: number } | null;
+  last_7_days_labels: string[];
+  last_7_days_confirmed_counts: number[];
+}
+
+export async function getSheetAnalytics() {
+  const { data } = await api.get<SheetAnalyticsResponse>('/analytics');
+  return data;
+}
+
 export async function patchBooking(rowId: number, payload: BookingPatchPayload) {
   const { data } = await api.patch<{ status: string }>(`/bookings/${rowId}`, payload);
   return data;
