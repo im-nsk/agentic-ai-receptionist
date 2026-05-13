@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookResponse, bookAppointment, checkAvailability } from '@/api/client';
+import { cn } from '@/utils/cn';
 import { getApiErrorMessage } from '@/api/errors';
 import { MonthCalendar } from '@/components/MonthCalendar';
 import { useToast } from '@/components/toast/ToastContext';
@@ -30,6 +31,9 @@ export const Booking: React.FC = () => {
   const [checking, setChecking] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [message, setMessage] = useState<string>('');
+  /** Per-slot server availability for the selected day (false = booked / conflict / rules). */
+  const [slotOk, setSlotOk] = useState<Record<string, boolean>>({});
+  const [slotsProbeDone, setSlotsProbeDone] = useState(false);
 
   const minSelectableYmd = useMemo(() => todayYmdInTimeZone(tenantTz), [tenantTz]);
 
@@ -88,6 +92,65 @@ export const Booking: React.FC = () => {
     }
   }, [selectedDate, isDateDisabled, minSelectableYmd]);
 
+  useEffect(() => {
+    if (!timeSlots.length) {
+      setSlotOk({});
+      setSlotsProbeDone(true);
+      return;
+    }
+    const clientId = getClientIdFromToken();
+    if (!clientId) {
+      setSlotOk({});
+      setSlotsProbeDone(true);
+      return;
+    }
+    let cancelled = false;
+    setSlotsProbeDone(false);
+    setSlotOk({});
+
+    void (async () => {
+      const next: Record<string, boolean> = {};
+      await Promise.all(
+        timeSlots.map(async (slot) => {
+          if (isSlotInPastForTenant(dateIso, slot, tenantTz)) {
+            next[slot] = false;
+            return;
+          }
+          try {
+            const res = await checkAvailability({
+              client_id: clientId,
+              name: 'check',
+              phone: '0000000000',
+              date: dateIso,
+              time: slot,
+            });
+            next[slot] = res.available;
+          } catch {
+            next[slot] = false;
+          }
+        })
+      );
+      if (!cancelled) {
+        setSlotOk(next);
+        setSlotsProbeDone(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dateIso, slotsLayoutKey, tenantTz, timeSlots]);
+
+  useEffect(() => {
+    if (!selectedTime) return;
+    if (!slotsProbeDone) return;
+    if (isSlotInPastForTenant(dateIso, selectedTime, tenantTz) || slotOk[selectedTime] === false) {
+      setSelectedTime(null);
+      setAvailable(null);
+      setMessage('');
+    }
+  }, [selectedTime, slotsProbeDone, slotOk, dateIso, tenantTz]);
+
   const checkSlot = async (time: string) => {
     const clientId = getClientIdFromToken();
     if (!clientId) return;
@@ -138,7 +201,7 @@ export const Booking: React.FC = () => {
       toast.error('That time has already passed for your business timezone.');
       return;
     }
-    if (available !== true) {
+    if (available !== true || slotOk[selectedTime] !== true) {
       toast.error('Choose an available time slot.');
       return;
     }
@@ -212,31 +275,47 @@ export const Booking: React.FC = () => {
                 </p>
               ) : (
                 timeSlots.map((slot) => {
-                const past = isSlotInPastForTenant(dateIso, slot, tenantTz);
-                return (
-                  <button
-                    key={slot}
-                    type="button"
-                    disabled={past}
-                    onClick={() => {
-                      if (past) return;
-                      setSelectedTime(slot);
-                      void checkSlot(slot);
-                    }}
-                    className={`rounded-xl border px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide transition-colors sm:text-xs ${
-                      past
-                        ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-600'
-                        : selectedTime === slot
-                          ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-600/25'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-blue-400 hover:bg-blue-50/60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
-                    }`}
-                  >
-                    {slot}
-                  </button>
-                );
-              })
+                  const past = isSlotInPastForTenant(dateIso, slot, tenantTz);
+                  const canSelect = slotsProbeDone && !past && slotOk[slot] === true;
+                  const dead = !canSelect;
+                  const probing = !slotsProbeDone && !past;
+                  const isSelected = selectedTime === slot && canSelect;
+                  return (
+                    <button
+                      key={slot}
+                      type="button"
+                      disabled={dead}
+                      aria-busy={probing}
+                      onClick={() => {
+                        if (!canSelect) return;
+                        setSelectedTime(slot);
+                        void checkSlot(slot);
+                      }}
+                      className={cn(
+                        'rounded-xl border px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide sm:text-xs',
+                        dead &&
+                          cn(
+                            'cursor-not-allowed border-slate-200/80 bg-slate-100 text-slate-400 opacity-70 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-600',
+                            past && 'opacity-55',
+                            probing && 'opacity-50'
+                          ),
+                        !dead &&
+                          cn(
+                            isSelected
+                              ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-600/25'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-blue-400 hover:bg-blue-50/60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
+                          )
+                      )}
+                    >
+                      {slot}
+                    </button>
+                  );
+                })
               )}
             </div>
+            {!slotsProbeDone && timeSlots.length > 0 && (
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Checking which times are still available…</p>
+            )}
             {checking && <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">Checking slot...</p>}
             {selectedTime && !checking && message && (
               <p
