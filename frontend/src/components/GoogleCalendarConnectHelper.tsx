@@ -70,7 +70,6 @@ export const GoogleCalendarConnectHelper: React.FC<GoogleCalendarConnectHelperPr
       </div>
 
       <div className="mt-4 space-y-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Step 1</p>
         <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Share your calendar with this email:</p>
         {configLoading ? (
           <div className="h-11 animate-pulse rounded-lg bg-slate-200/80 dark:bg-slate-800" aria-hidden />
@@ -113,8 +112,7 @@ export const GoogleCalendarConnectHelper: React.FC<GoogleCalendarConnectHelperPr
         {howToOpen && (
           <div className="mt-2 space-y-4 pl-0.5">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Step 2</p>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">In Google Calendar:</p>
+              <p className="text-sm font-medium text-slate-800 dark:text-slate-200">In Google Calendar</p>
               <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-slate-700 dark:text-slate-300">
                 <li>Open your calendar settings</li>
                 <li>Select your calendar</li>
@@ -126,9 +124,8 @@ export const GoogleCalendarConnectHelper: React.FC<GoogleCalendarConnectHelperPr
               </ol>
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Step 3</p>
               <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">
-                Then enter your Google Calendar email in the field below (the account that owns the calendar you shared).
+                Then enter your Google Calendar ID in the field below (usually the account that owns the calendar you shared).
               </p>
             </div>
           </div>

@@ -8,6 +8,7 @@ import { GoogleCalendarConnectHelper } from '@/components/GoogleCalendarConnectH
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { ExternalLink } from 'lucide-react';
 import { phoneFieldError } from '@/utils/phone';
 import {
   WEEKDAY_KEYS,
@@ -41,6 +42,12 @@ function formatBlockedLabel(iso: string): string {
   return dt.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+function normalizeGoogleSheetIdInput(raw: string): string {
+  const t = raw.trim();
+  const m = t.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)\/?/);
+  return m ? m[1] : t;
+}
+
 export const Settings: React.FC = () => {
   const toast = useToast();
   const { refreshProfile } = useAuth();
@@ -48,7 +55,7 @@ export const Settings: React.FC = () => {
   const [loadFailed, setLoadFailed] = useState(false);
 
   const [calendarId, setCalendarId] = useState('');
-  const [linkedSheetId, setLinkedSheetId] = useState('');
+  const [sheetId, setSheetId] = useState('');
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
   const [clientPhoneNumber, setClientPhoneNumber] = useState('');
   const [businessName, setBusinessName] = useState('');
@@ -67,8 +74,10 @@ export const Settings: React.FC = () => {
   const [publicConfigLoading, setPublicConfigLoading] = useState(true);
 
   const applyClient = useCallback((c: ClientResponse) => {
-    setCalendarId((c.calendar_id || '').trim());
-    setLinkedSheetId((c.sheet_id || '').trim());
+    const calStored = (c.calendar_id || '').trim();
+    const acctEmail = (c.email || '').trim();
+    setCalendarId(calStored || acctEmail);
+    setSheetId((c.sheet_id || '').trim());
     setTimezone((c.timezone || '').trim() || DEFAULT_TIMEZONE);
     setClientPhoneNumber((c.client_phone || '').trim());
     setBusinessName((c.business_name || '').trim());
@@ -145,7 +154,12 @@ export const Settings: React.FC = () => {
     e.preventDefault();
     const cal = calendarId.trim();
     const tz = timezone.trim();
+    const sid = normalizeGoogleSheetIdInput(sheetId);
 
+    if (!sid) {
+      toast.error('Please enter your Google Sheet ID.');
+      return;
+    }
     if (!cal || !tz) {
       toast.error('Calendar ID and timezone are required.');
       return;
@@ -187,6 +201,7 @@ export const Settings: React.FC = () => {
       setSaving(true);
       await postSetup({
         calendar_id: cal,
+        sheet_id: sid,
         timezone: tz,
         client_phone: ownerPhone,
         business_name: bn,
@@ -281,16 +296,21 @@ export const Settings: React.FC = () => {
 
           <Card
             title="Integrations"
-            description="Google Calendar for availability. A booking spreadsheet is created for you automatically (or use an existing linked sheet from a prior setup)."
+            description="Link Google Calendar for availability and a Google Sheet you create and share. The service account only accesses what you explicitly share."
           >
             <div className="space-y-5 pt-2">
-              <GoogleCalendarConnectHelper
-                key={setupComplete ? 'calendar-onboarding-done' : 'calendar-onboarding-pending'}
-                serviceAccountEmail={serviceAccountEmail}
-                configLoading={publicConfigLoading}
-                disabled={inputDisabled}
-                defaultHowToOpen={!setupComplete}
-              />
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Step 1 — Share Google Calendar
+                </p>
+                <GoogleCalendarConnectHelper
+                  key={setupComplete ? 'calendar-onboarding-done' : 'calendar-onboarding-pending'}
+                  serviceAccountEmail={serviceAccountEmail}
+                  configLoading={publicConfigLoading}
+                  disabled={inputDisabled}
+                  defaultHowToOpen={!setupComplete}
+                />
+              </div>
               <Input
                 id="google-calendar-id-input"
                 label="Google Calendar ID"
@@ -301,27 +321,64 @@ export const Settings: React.FC = () => {
                 required
               />
               <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Use the Google account email for the calendar you shared (same address you use in Google Calendar).
+                Defaults to your signup email; change it if you use a different Google account for this calendar.
               </p>
-              {linkedSheetId ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900/50">
-                  <p className="font-medium text-slate-800 dark:text-slate-100">Booking spreadsheet</p>
-                  <p className="mt-1 break-all text-slate-600 dark:text-slate-400">
-                    <a
-                      href={`https://docs.google.com/spreadsheets/d/${linkedSheetId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline hover:text-blue-500 dark:text-blue-400"
-                    >
-                      Open in Google Sheets
-                    </a>
+
+              <div className="space-y-4 border-t border-slate-200 pt-5 dark:border-slate-700">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Step 2 — Share Google Sheet
+                </p>
+                <div>
+                  <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">Connect Google Sheet</h4>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    Create a Google Sheet for booking records and share it with the same service account email as above (Editor).
                   </p>
                 </div>
-              ) : (
-                <p className="text-sm text-slate-600 dark:text-slate-400">
-                  After you save, we&apos;ll create a Google Sheet with the correct columns and freeze the header row.
+                <ol className="list-decimal space-y-1.5 pl-5 text-sm text-slate-700 dark:text-slate-300">
+                  <li>Open Google Sheets</li>
+                  <li>Create a blank sheet</li>
+                  <li>Share the sheet with the service account email</li>
+                  <li>Permission: Editor</li>
+                  <li>Copy the Sheet ID from the URL</li>
+                  <li>Paste it below</li>
+                </ol>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={inputDisabled}
+                  onClick={() => window.open('https://sheets.google.com/', '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                  Open Google Sheets
+                </Button>
+                <Input
+                  id="google-sheet-id-input"
+                  label="Google Sheet ID"
+                  value={sheetId}
+                  onChange={(e) => setSheetId(e.target.value)}
+                  placeholder="From docs.google.com/spreadsheets/d/…"
+                  disabled={inputDisabled}
+                  required
+                />
+                <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
+                  You can paste the full spreadsheet URL or just the ID. Row 1 headers are created or repaired on save when needed.
                 </p>
-              )}
+                {normalizeGoogleSheetIdInput(sheetId) ? (
+                  <p className="text-sm">
+                    <a
+                      href={`https://docs.google.com/spreadsheets/d/${normalizeGoogleSheetIdInput(sheetId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-blue-600 underline hover:text-blue-500 dark:text-blue-400"
+                    >
+                      Open this spreadsheet in Google Sheets
+                    </a>
+                  </p>
+                ) : null}
+              </div>
+
               <Select label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={inputDisabled} required>
                 {COMMON_TIMEZONES.map((tz) => (
                   <option key={tz} value={tz}>
@@ -496,7 +553,7 @@ export const Settings: React.FC = () => {
 
           <Card title="About your data">
             <ul className="space-y-3 text-sm text-slate-600 dark:text-slate-400">
-              <li>Your booking log lives in Google Sheets (created automatically on first save). Headers stay consistent; you can edit data rows safely.</li>
+              <li>Your booking log lives in a Google Sheet you own and share. The first row is kept as a header; you can edit data rows safely.</li>
               <li>Dashboard metrics are read from the server, not your browser.</li>
               <li>Weekly hours and blocked dates are stored in your workspace configuration and enforced on every booking.</li>
             </ul>

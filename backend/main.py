@@ -39,7 +39,6 @@ from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
 from backend.services.sheets_service import (
-    create_provisioned_booking_sheet,
     delete_booking_data_row,
     ensure_booking_sheet_headers,
     get_data_row_cells,
@@ -411,6 +410,7 @@ def get_client_data(
     )
     return {
         "name": client.name,
+        "email": (client.email or "").strip(),
         "minutes_used": 0,
         "plan_limit": 1000,
         "calendar_id": client.calendar_id or "",
@@ -441,39 +441,24 @@ def setup(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    sheet_in = (payload.sheet_id or "").strip() if payload.sheet_id else ""
-    if sheet_in:
-        try:
-            ensure_booking_sheet_headers(sheet_in)
-        except Exception as e:
-            print("SETUP SHEET HEAL:", repr(e))
-            raise HTTPException(status_code=400, detail="Invalid or inaccessible Google Sheet") from e
-        client.sheet_id = sheet_in
-    elif not (client.sheet_id or "").strip():
-        try:
-            title = payload.business_name.strip() or (client.name or "Bookings")
-            client.sheet_id = create_provisioned_booking_sheet(title)
-        except Exception as e:
-            print("SHEET PROVISION ERROR:", repr(e))
-            raise HTTPException(
-                status_code=500,
-                detail="Could not create booking sheet. Check Google credentials and Drive/Sheets API access.",
-            ) from e
-    else:
-        try:
-            ensure_booking_sheet_headers((client.sheet_id or "").strip())
-        except Exception as e:
-            print("SETUP SHEET HEAL:", repr(e))
-            raise HTTPException(status_code=400, detail="Could not validate booking sheet headers") from e
+    sheet_err_share = "Please share the Google Sheet with the service account email and try again."
+    cal_err_share = "Please share your Google Calendar with the service account email and try again."
+
+    sheet_in = ((payload.sheet_id or "").strip() if payload.sheet_id else "") or ((client.sheet_id or "").strip())
+    if not sheet_in:
+        raise HTTPException(status_code=400, detail="Please enter your Google Sheet ID.")
+
+    try:
+        ensure_booking_sheet_headers(sheet_in)
+    except Exception as e:
+        print("SETUP SHEET ACCESS:", repr(e))
+        raise HTTPException(status_code=400, detail=sheet_err_share) from e
 
     cal_trim = payload.calendar_id.strip()
     try:
         verify_tenant_calendar_readable(cal_trim)
     except CalendarAccessNotGrantedError as e:
-        raise HTTPException(
-            status_code=400,
-            detail="Calendar access not granted yet. Please share your calendar with the service account email above and try again.",
-        ) from e
+        raise HTTPException(status_code=400, detail=cal_err_share) from e
     except Exception as e:
         print("SETUP CALENDAR VERIFY:", repr(e))
         raise HTTPException(
@@ -482,6 +467,7 @@ def setup(
         ) from e
 
     client.client_phone = payload.client_phone
+    client.sheet_id = sheet_in
     client.calendar_id = cal_trim
     client.timezone = payload.timezone
     client.business_name = payload.business_name

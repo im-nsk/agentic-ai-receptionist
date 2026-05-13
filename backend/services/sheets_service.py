@@ -1,4 +1,4 @@
-"""Google Sheets booking log — provisioned workbooks, header self-heal, append rows."""
+"""Google Sheets booking log — client-shared workbooks, header self-heal, append rows."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from google.oauth2 import service_account
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
 ]
 
 BOOKING_HEADERS: List[str] = [
@@ -61,23 +60,6 @@ def _row1_matches_header(row: List[str]) -> bool:
     return trimmed == BOOKING_HEADERS
 
 
-def ensure_booking_sheet_headers(sheet_id: str) -> None:
-    """Ensure row 1 matches required headers (self-heal). Safe to call before every write/read."""
-    if not sheet_id:
-        return
-    try:
-        ws = get_sheet(sheet_id)
-        row1 = ws.row_values(1)
-        if _row1_matches_header(row1):
-            return
-        rng = _header_range_a1()
-        ws.update(rng, [BOOKING_HEADERS], value_input_option="RAW")
-        print("✅ Repaired booking sheet header row")
-    except Exception as e:
-        print("❌ ensure_booking_sheet_headers:", repr(e))
-        raise
-
-
 def _apply_frozen_header_row(worksheet: gspread.Worksheet) -> None:
     """Freeze row 1; header warning-only protection (edits allowed with prompt)."""
     try:
@@ -118,22 +100,22 @@ def _apply_frozen_header_row(worksheet: gspread.Worksheet) -> None:
         print("⚠️ Header format (freeze/protect) skipped:", repr(e))
 
 
-def create_provisioned_booking_sheet(title: str) -> str:
-    """
-    Create a new spreadsheet owned by the service account, write headers, freeze + soft-protect row 1.
-    Returns spreadsheet ID (for clients.sheet_id).
-
-    Workbook title is fixed for a consistent tenant experience; ``title`` is kept for API compatibility.
-    """
-    _ = title  # unused; provisioning uses a single branded workbook name
-    spreadsheet = _client.create("AI Receptionist Booking Sheet")
-    ws = spreadsheet.sheet1
-    rng = _header_range_a1()
-    ws.update(rng, [BOOKING_HEADERS], value_input_option="RAW")
-    _apply_frozen_header_row(ws)
-    sid = spreadsheet.id
-    print("✅ Provisioned booking sheet:", sid)
-    return str(sid)
+def ensure_booking_sheet_headers(sheet_id: str) -> None:
+    """Ensure row 1 matches required headers (self-heal). Safe to call before every write/read."""
+    if not sheet_id:
+        return
+    try:
+        ws = get_sheet(sheet_id)
+        row1 = ws.row_values(1)
+        if _row1_matches_header(row1):
+            return
+        rng = _header_range_a1()
+        ws.update(rng, [BOOKING_HEADERS], value_input_option="RAW")
+        _apply_frozen_header_row(ws)
+        print("✅ Repaired booking sheet header row")
+    except Exception as e:
+        print("❌ ensure_booking_sheet_headers:", repr(e))
+        raise
 
 
 def save_to_sheet(
