@@ -702,6 +702,7 @@ def book_web(
             weekly_availability=client.weekly_availability,
             blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
+            business_name=client.business_name,
         )
 
     except HTTPException:
@@ -800,6 +801,7 @@ def vapi_book(
             weekly_availability=client.weekly_availability,
             blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
+            business_name=client.business_name,
         )
 
     except HTTPException:

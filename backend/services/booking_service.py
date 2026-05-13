@@ -61,6 +61,7 @@ def book_appointment_logic(
     weekly_availability: Optional[Any] = None,
     blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
+    business_name: Optional[str] = None,
 ) -> dict:
     if not calendar_id or not sheet_id:
         raise HTTPException(status_code=400, detail="Client setup incomplete")
@@ -90,6 +91,7 @@ def book_appointment_logic(
         weekly_availability=weekly_availability,
         blocked_dates=blocked_dates,
         working_hours=working_hours,
+        business_name=business_name,
     )
 
     if not ok:

@@ -1,6 +1,5 @@
 import json
 import os
-import uuid
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -14,6 +13,7 @@ from backend.services.availability_rules import (
     is_date_blocked,
     minutes_window_for_date,
 )
+from backend.services.human_booking_id import generate_human_booking_id
 from backend.services.sheets_service import save_to_sheet
 
 
@@ -195,6 +195,7 @@ def create_event(
     weekly_availability: Optional[Any] = None,
     blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
+    business_name: Optional[str] = None,
 ):
     try:
         if not calendar_id or not sheet_id:
@@ -237,7 +238,7 @@ def create_event(
             body=event
         ).execute()
 
-        booking_id = str(uuid.uuid4())
+        booking_id = generate_human_booking_id(business_name)
         save_to_sheet(
             booking_id=booking_id,
             name=name,

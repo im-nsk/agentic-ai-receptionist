@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { deleteBooking, getBookings, getClient, getSheetAnalytics, patchBooking, type SheetAnalyticsResponse } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { useToast } from '@/components/toast/ToastContext';
@@ -8,7 +9,7 @@ import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Table, TableCell, TableRow } from '@/components/ui/Table';
 import { useAuth } from '@/hooks/AuthContext';
-import { BarChart3, Calendar, Clock, MoreHorizontal, Phone, Target, XCircle } from 'lucide-react';
+import { BarChart3, Calendar, Clock, MoreVertical, Phone, Target, XCircle } from 'lucide-react';
 import { isBookingInstantInPast } from '@/utils/tenantTime';
 
 function barHeightClass(count: number, max: number): string {
@@ -35,6 +36,10 @@ function formatMetric(n: number | null | undefined, ok: boolean): string {
   return String(n);
 }
 
+const ACTION_MENU_WIDTH_PX = 176;
+
+type ActionMenuState = { rowId: number; top: number; left: number } | null;
+
 export const Dashboard: React.FC = () => {
   const { profile } = useAuth();
   const toast = useToast();
@@ -48,7 +53,7 @@ export const Dashboard: React.FC = () => {
   /** True during background reload (keeps metrics visible; avoids full-page skeleton flash). */
   const [refreshing, setRefreshing] = useState(false);
   const [rowBusy, setRowBusy] = useState<number | null>(null);
-  const [openMenuRow, setOpenMenuRow] = useState<number | null>(null);
+  const [actionMenu, setActionMenu] = useState<ActionMenuState>(null);
   const [rescheduleRowId, setRescheduleRowId] = useState<number | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduleTime, setRescheduleTime] = useState('');
@@ -92,6 +97,20 @@ export const Dashboard: React.FC = () => {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (actionMenu === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActionMenu(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [actionMenu]);
+
+  useEffect(() => {
+    if (actionMenu === null) return;
+    if (!recent.some((x) => x.row_id === actionMenu.rowId)) setActionMenu(null);
+  }, [actionMenu, recent]);
+
   const a = analytics;
   const showMetrics = !loading && analyticsOk && a != null;
   const trends = showMetrics ? a.last_7_days_confirmed_counts : [];
@@ -105,7 +124,7 @@ export const Dashboard: React.FC = () => {
       : 'No bookings yet — new rows appear here as soon as they are written to your Google Sheet.';
 
   const beginReschedule = (row: (typeof bookings)[0]) => {
-    setOpenMenuRow(null);
+    setActionMenu(null);
     setRescheduleRowId(row.row_id);
     setRescheduleDate(row.date || '');
     setRescheduleTime(row.time || '');
@@ -139,7 +158,7 @@ export const Dashboard: React.FC = () => {
   const handleCancel = async (rowId: number) => {
     if (!window.confirm('Mark this booking as cancelled in the sheet?')) return;
     setRowBusy(rowId);
-    setOpenMenuRow(null);
+    setActionMenu(null);
     try {
       await patchBooking(rowId, { status: 'cancelled' });
       toast.success('Booking marked cancelled in your sheet.');
@@ -154,7 +173,7 @@ export const Dashboard: React.FC = () => {
   const handleDelete = async (rowId: number) => {
     if (!window.confirm('Permanently delete this row from Google Sheets? This cannot be undone.')) return;
     setRowBusy(rowId);
-    setOpenMenuRow(null);
+    setActionMenu(null);
     try {
       await deleteBooking(rowId);
       if (rescheduleRowId === rowId) setRescheduleRowId(null);
@@ -166,6 +185,8 @@ export const Dashboard: React.FC = () => {
       setRowBusy(null);
     }
   };
+
+  const actionMenuRow = actionMenu !== null ? recent.find((x) => x.row_id === actionMenu.rowId) : undefined;
 
   return (
     <div className="mx-auto max-w-7xl space-y-10 px-1 sm:px-0">
@@ -346,18 +367,13 @@ export const Dashboard: React.FC = () => {
             </div>
           ) : (
             <div className="relative isolate">
-              {openMenuRow !== null && (
-                <button
-                  type="button"
-                  className="fixed inset-0 z-[100] cursor-default bg-slate-900/10 dark:bg-black/30"
-                  aria-label="Close menu"
-                  onClick={() => setOpenMenuRow(null)}
-                />
-              )}
-              <Table className="relative z-[120]" headers={['Guest', 'When', 'Phone', 'Outcome', 'Actions']}>
+              <Table className="relative" headers={['Guest', 'Ref', 'When', 'Phone', 'Outcome', '']}>
                 {recent.map((row) => (
                   <TableRow key={`${row.row_id}-${row.id}`}>
                     <TableCell className="font-medium text-slate-900 dark:text-slate-100">{row.name}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs text-slate-600 dark:text-slate-400">
+                      {row.id || '—'}
+                    </TableCell>
                     <TableCell>
                       {row.date}{' '}
                       <span className="inline-flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
@@ -376,41 +392,37 @@ export const Dashboard: React.FC = () => {
                         {row.status}
                       </span>
                     </TableCell>
-                    <TableCell className="relative z-[120] w-44 min-w-[8rem]">
+                    <TableCell className="w-px whitespace-nowrap px-3 text-right align-middle">
                       <button
                         type="button"
                         disabled={rowBusy === row.row_id}
-                        onClick={() => setOpenMenuRow((v) => (v === row.row_id ? null : row.row_id))}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                        aria-label="Booking actions"
+                        aria-expanded={actionMenu?.rowId === row.row_id}
+                        aria-haspopup="menu"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const el = e.currentTarget;
+                          if (actionMenu?.rowId === row.row_id) {
+                            setActionMenu(null);
+                            return;
+                          }
+                          const r = el.getBoundingClientRect();
+                          const menuApproxH = 132;
+                          const left = Math.min(
+                            Math.max(8, r.right - ACTION_MENU_WIDTH_PX),
+                            window.innerWidth - ACTION_MENU_WIDTH_PX - 8
+                          );
+                          const top = Math.min(r.bottom + 6, window.innerHeight - menuApproxH - 8);
+                          setActionMenu({ rowId: row.row_id, top, left });
+                        }}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
                       >
-                        <MoreHorizontal className="h-4 w-4" />
-                        {rowBusy === row.row_id ? '…' : 'Actions'}
+                        {rowBusy === row.row_id ? (
+                          <span className="text-xs font-semibold">…</span>
+                        ) : (
+                          <MoreVertical className="h-4 w-4" aria-hidden />
+                        )}
                       </button>
-                      {openMenuRow === row.row_id && (
-                        <div className="absolute bottom-full right-0 z-[130] mb-1 min-w-[10rem] rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900 sm:bottom-auto sm:top-full sm:mb-0 sm:mt-1">
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
-                            onClick={() => beginReschedule(row)}
-                          >
-                            Reschedule
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
-                            onClick={() => void handleCancel(row.row_id)}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-                            onClick={() => void handleDelete(row.row_id)}
-                          >
-                            Delete row
-                          </button>
-                        </div>
-                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -440,6 +452,51 @@ export const Dashboard: React.FC = () => {
           </div>
         </Card>
       )}
+      {actionMenu !== null && actionMenuRow !== undefined &&
+        createPortal(
+          <>
+            <div
+              role="presentation"
+              className="fixed inset-0 z-[240] bg-slate-900/15 dark:bg-black/35"
+              onClick={() => setActionMenu(null)}
+              aria-hidden
+            />
+            <div
+              role="menu"
+              aria-orientation="vertical"
+              className="fixed z-[250] w-[176px] overflow-hidden rounded-xl border border-slate-200 bg-white py-1 text-sm shadow-2xl ring-1 ring-black/5 dark:border-slate-700 dark:bg-slate-900 dark:ring-white/10"
+              style={{ top: actionMenu.top, left: actionMenu.left }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center px-3 py-2.5 text-left font-medium text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
+                onClick={() => {
+                  beginReschedule(actionMenuRow);
+                }}
+              >
+                Reschedule
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center px-3 py-2.5 text-left font-medium text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
+                onClick={() => void handleCancel(actionMenuRow.row_id)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center px-3 py-2.5 text-left font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                onClick={() => void handleDelete(actionMenuRow.row_id)}
+              >
+                Delete
+              </button>
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   );
 };
