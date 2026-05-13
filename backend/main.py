@@ -28,7 +28,13 @@ from backend.services.auth_service import (
 from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
 from backend.services.availability_rules import normalize_blocked_dates, validate_weekly_availability_dict
-from backend.services.calendar_service import check_availability, tenant_schedule_allows
+from backend.services.calendar_service import (
+    CalendarAccessNotGrantedError,
+    check_availability,
+    tenant_schedule_allows,
+    verify_tenant_calendar_readable,
+)
+from backend.services.google_public import get_booking_service_account_email
 from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
@@ -55,6 +61,18 @@ if os.getenv("APP_ENV", "").lower() in ("production", "prod") and VAPI_API_KEY =
     )
 
 migrate_schema(engine)
+
+
+class PublicConfigResponse(BaseModel):
+    """Safe, unauthenticated metadata for onboarding (no secrets)."""
+
+    google_booking_service_account_email: Optional[str] = None
+
+
+@app.get("/public/config", response_model=PublicConfigResponse)
+def public_config():
+    return PublicConfigResponse(google_booking_service_account_email=get_booking_service_account_email())
+
 
 # ---------------- CORS ---------------- #
 app.add_middleware(
@@ -448,8 +466,23 @@ def setup(
             print("SETUP SHEET HEAL:", repr(e))
             raise HTTPException(status_code=400, detail="Could not validate booking sheet headers") from e
 
+    cal_trim = payload.calendar_id.strip()
+    try:
+        verify_tenant_calendar_readable(cal_trim)
+    except CalendarAccessNotGrantedError as e:
+        raise HTTPException(
+            status_code=400,
+            detail="Calendar access not granted yet. Please share your calendar with the service account email above and try again.",
+        ) from e
+    except Exception as e:
+        print("SETUP CALENDAR VERIFY:", repr(e))
+        raise HTTPException(
+            status_code=502,
+            detail="Could not verify Google Calendar. Try again in a moment or contact support if this persists.",
+        ) from e
+
     client.client_phone = payload.client_phone
-    client.calendar_id = payload.calendar_id
+    client.calendar_id = cal_trim
     client.timezone = payload.timezone
     client.business_name = payload.business_name
     try:

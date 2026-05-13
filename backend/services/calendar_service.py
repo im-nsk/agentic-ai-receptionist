@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from dateutil import parser
 
 from backend.services.availability_rules import (
@@ -27,6 +28,29 @@ credentials = service_account.Credentials.from_service_account_info(
 )
 
 service = build('calendar', 'v3', credentials=credentials)
+
+
+class CalendarAccessNotGrantedError(Exception):
+    """Raised when the service account cannot read the tenant calendar (not shared, wrong ID, etc.)."""
+
+
+def verify_tenant_calendar_readable(calendar_id: str) -> None:
+    """
+    Confirms Google Calendar API can read the calendar (sharing + correct calendar ID).
+    Raises CalendarAccessNotGrantedError for typical access-denied responses.
+    """
+    cal = (calendar_id or "").strip()
+    if not cal:
+        raise CalendarAccessNotGrantedError("empty calendar id")
+    try:
+        service.calendars().get(calendarId=cal).execute()
+    except HttpError as e:
+        code = getattr(e.resp, "status", None) or 0
+        if code in (403, 404):
+            raise CalendarAccessNotGrantedError(str(e)) from e
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Calendar verification failed: {e!r}") from e
 
 
 # ---------------- PARSER ---------------- #
