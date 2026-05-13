@@ -72,6 +72,8 @@ export async function getPublicConfig() {
 
 export interface ClientResponse {
   name: string;
+  /** Account email; used to default Google Calendar ID before setup. */
+  email?: string;
   minutes_used: number;
   plan_limit: number;
   calendar_id: string;
