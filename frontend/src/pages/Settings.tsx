@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { getClient, postSetup, type ClientResponse } from '@/api/client';
+import { getClient, getPublicConfig, postSetup, type ClientResponse } from '@/api/client';
 import { getApiErrorMessage } from '@/api/errors';
 import { useToast } from '@/components/toast/ToastContext';
 import { useAuth } from '@/hooks/AuthContext';
 import { Button } from '@/components/ui/Button';
+import { GoogleCalendarConnectHelper } from '@/components/GoogleCalendarConnectHelper';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -62,6 +63,8 @@ export const Settings: React.FC = () => {
   const [editing, setEditing] = useState(true);
 
   const [saving, setSaving] = useState(false);
+  const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
+  const [publicConfigLoading, setPublicConfigLoading] = useState(true);
 
   const applyClient = useCallback((c: ClientResponse) => {
     setCalendarId((c.calendar_id || '').trim());
@@ -98,6 +101,30 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPublicConfigLoading(true);
+    void (async () => {
+      try {
+        const cfg = await getPublicConfig();
+        if (!cancelled) {
+          setServiceAccountEmail(cfg.google_booking_service_account_email?.trim() || null);
+        }
+      } catch {
+        if (!cancelled) {
+          setServiceAccountEmail(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setPublicConfigLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const parseServices = useMemo(() => {
     return servicesText
@@ -257,7 +284,15 @@ export const Settings: React.FC = () => {
             description="Google Calendar for availability. A booking spreadsheet is created for you automatically (or use an existing linked sheet from a prior setup)."
           >
             <div className="space-y-5 pt-2">
+              <GoogleCalendarConnectHelper
+                key={setupComplete ? 'calendar-onboarding-done' : 'calendar-onboarding-pending'}
+                serviceAccountEmail={serviceAccountEmail}
+                configLoading={publicConfigLoading}
+                disabled={inputDisabled}
+                defaultHowToOpen={!setupComplete}
+              />
               <Input
+                id="google-calendar-id-input"
                 label="Google Calendar ID"
                 value={calendarId}
                 onChange={(e) => setCalendarId(e.target.value)}
@@ -265,6 +300,9 @@ export const Settings: React.FC = () => {
                 disabled={inputDisabled}
                 required
               />
+              <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Use the Google account email for the calendar you shared (same address you use in Google Calendar).
+              </p>
               {linkedSheetId ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900/50">
                   <p className="font-medium text-slate-800 dark:text-slate-100">Booking spreadsheet</p>

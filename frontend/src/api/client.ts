@@ -61,6 +61,15 @@ export interface LoginResponse {
   access_token: string;
 }
 
+export interface PublicConfigResponse {
+  google_booking_service_account_email: string | null;
+}
+
+export async function getPublicConfig() {
+  const { data } = await api.get<PublicConfigResponse>('/public/config', { skipAuth: true });
+  return data;
+}
+
 export interface ClientResponse {
   name: string;
   minutes_used: number;
