@@ -138,6 +138,7 @@ export interface AppointmentPayload {
 export interface AvailabilityResponse {
   available: boolean;
   message: string;
+  availability_check_failed?: boolean;
 }
 
 export interface BookResponse {

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.database import SessionLocal, engine
 from backend.db.migrate import migrate_schema
-from backend.models.booking import BookingRequest
+from backend.models.booking import AvailabilityCheckRequest, BookingRequest
 from backend.models.client import Client
 from backend.services.auth_service import (
     create_access_token,
@@ -611,7 +611,7 @@ def patch_booking_row_endpoint(
                 weekly_availability=client.weekly_availability,
                 blocked_dates=client.blocked_dates,
                 working_hours=client.working_hours,
-            ):
+            ).get("available"):
                 raise HTTPException(status_code=400, detail="That time is not available.")
         else:
             if not tenant_schedule_allows(
@@ -667,31 +667,62 @@ def delete_booking_row_endpoint(
 
 @app.post("/check-availability")
 def availability(
-    req: BookingRequest,
+    req: AvailabilityCheckRequest,
     client_id: str = Depends(get_current_client_id),
     db: Session = Depends(get_db),
 ):
+    print(
+        "CHECK-AVAILABILITY incoming:",
+        f"auth_client_id={client_id}",
+        f"date={req.date!r}",
+        f"time={req.time!r}",
+    )
     try:
         client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
-        if req.client_id != client.id:
-            raise HTTPException(status_code=400, detail="client_id does not match authenticated session")
+            print("CHECK-AVAILABILITY: client not found", f"auth_client_id={client_id}")
+            return {
+                "available": False,
+                "availability_check_failed": True,
+                "message": "Client not found",
+            }
+
+        cal_id = (client.calendar_id or "").strip() or None
+        tz = (client.timezone or "America/New_York").strip() or "America/New_York"
+        print(
+            "CHECK-AVAILABILITY client:",
+            f"calendar_id={cal_id!r}",
+            f"timezone={tz!r}",
+            f"weekly_availability={client.weekly_availability!r}",
+            f"blocked_dates={client.blocked_dates!r}",
+        )
+
         return check_availability_logic(
             date=req.date,
             time=req.time,
             calendar_id=client.calendar_id,
-            timezone_str=client.timezone or "America/New_York",
+            timezone_str=tz,
             duration_minutes=_client_slot_minutes(client),
             weekly_availability=client.weekly_availability,
             blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
         )
-    except HTTPException:
-        raise
+    except HTTPException as he:
+        if he.status_code in (401, 403):
+            raise
+        print("CHECK-AVAILABILITY HTTPException:", he.status_code, he.detail)
+        return {
+            "available": False,
+            "availability_check_failed": True,
+            "message": str(he.detail),
+        }
     except Exception as e:
-        print("Availability Error:", repr(e))
-        raise HTTPException(status_code=500, detail="Availability failed")
+        print("CHECK-AVAILABILITY unexpected:", repr(e))
+        return {
+            "available": False,
+            "availability_check_failed": True,
+            "message": "Availability check temporarily unavailable",
+        }
 
 
 @app.post("/book-appointment")

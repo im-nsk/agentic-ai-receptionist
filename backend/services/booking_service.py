@@ -6,6 +6,7 @@ from typing import Any, Optional
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.services.availability_rules import candidate_slot_times_for_date
 from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
 from backend.services.calendar_service import check_availability, create_event, tenant_schedule_allows
 from backend.services.phone_validation import normalize_and_validate_phone
@@ -23,36 +24,85 @@ def check_availability_logic(
     blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
 ) -> dict:
+    cal_id = (calendar_id or "").strip() or None
+    tz = (timezone_str or "").strip() or "America/New_York"
     duration_minutes = duration_minutes if duration_minutes > 0 else 30
+    date_str = (date or "").strip()
+    time_str = (time or "").strip()
+
+    candidates = candidate_slot_times_for_date(
+        weekly_availability,
+        working_hours,
+        blocked_dates,
+        date_str,
+        duration_minutes,
+    )
+    print(
+        "CHECK-AVAILABILITY logic:",
+        f"calendar_id={cal_id!r}",
+        f"timezone={tz!r}",
+        f"date={date_str!r}",
+        f"time={time_str!r}",
+        f"duration_min={duration_minutes}",
+        f"candidate_slots_count={len(candidates)}",
+    )
+
     try:
-        assert_booking_start_in_future(date, time, timezone_str)
+        assert_booking_start_in_future(date_str, time_str, tz)
     except BookingDatetimeError as exc:
-        return {"available": False, "message": str(exc)}
-    if not calendar_id:
-        ok = tenant_schedule_allows(
-            date,
-            time,
-            timezone_str,
+        return {
+            "available": False,
+            "availability_check_failed": False,
+            "message": str(exc),
+        }
+
+    try:
+        if not cal_id:
+            ok = tenant_schedule_allows(
+                date_str,
+                time_str,
+                tz,
+                duration_minutes=duration_minutes,
+                weekly_availability=weekly_availability,
+                blocked_dates=blocked_dates,
+                working_hours=working_hours,
+            )
+            return {
+                "available": ok,
+                "availability_check_failed": False,
+                "message": "Available" if ok else "Slot not available",
+            }
+
+        return check_availability(
+            date_str,
+            time_str,
+            cal_id,
+            tz,
             duration_minutes=duration_minutes,
             weekly_availability=weekly_availability,
             blocked_dates=blocked_dates,
             working_hours=working_hours,
         )
+    except Exception as e:
+        print("CHECK-AVAILABILITY logic error:", repr(e))
+        ok = False
+        try:
+            ok = tenant_schedule_allows(
+                date_str,
+                time_str,
+                tz,
+                duration_minutes=duration_minutes,
+                weekly_availability=weekly_availability,
+                blocked_dates=blocked_dates,
+                working_hours=working_hours,
+            )
+        except Exception as fallback_err:
+            print("CHECK-AVAILABILITY schedule fallback error:", repr(fallback_err))
         return {
             "available": ok,
-            "message": "Available" if ok else "Slot not available",
+            "availability_check_failed": True,
+            "message": "Calendar check unavailable; using schedule-only availability.",
         }
-    ok = check_availability(
-        date,
-        time,
-        calendar_id=calendar_id,
-        timezone=timezone_str,
-        duration_minutes=duration_minutes,
-        weekly_availability=weekly_availability,
-        blocked_dates=blocked_dates,
-        working_hours=working_hours,
-    )
-    return {"available": ok, "message": "Available" if ok else "Slot not available"}
 
 
 def book_appointment_logic(
