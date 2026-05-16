@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useToast } from '@/components/toast/ToastContext';
 import { AuthProvider, useAuth } from '@/hooks/AuthContext';
 import { MainLayout } from '@/layout/MainLayout';
@@ -83,6 +84,7 @@ function RootRedirect() {
 export default function App() {
   return (
     <AuthProvider>
+      <ErrorBoundary>
       <Routes>
         <Route
           path="/login"
@@ -138,6 +140,7 @@ export default function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </ErrorBoundary>
     </AuthProvider>
   );
 }
