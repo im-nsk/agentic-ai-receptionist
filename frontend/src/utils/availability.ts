@@ -65,13 +65,30 @@ function isCompleteWeekly(raw: unknown): raw is Record<string, unknown> {
   });
 }
 
+function coerceBool(value: unknown, defaultValue: boolean): boolean {
+  if (value === undefined || value === null) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+    if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  }
+  return Boolean(value);
+}
+
+function dayEnabled(o: Record<string, unknown>): boolean {
+  if ('enabled' in o) return coerceBool(o.enabled, true);
+  if ('open' in o) return coerceBool(o.open, true);
+  return true;
+}
+
 export function normalizeWeeklyAvailability(raw: unknown): WeeklyAvailability {
   const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const out = {} as WeeklyAvailability;
   for (const k of WEEKDAY_KEYS) {
     const seg = src[k];
     const o = seg && typeof seg === 'object' && !Array.isArray(seg) ? (seg as Record<string, unknown>) : {};
-    const enabled = Boolean(o.enabled ?? true);
+    const enabled = dayEnabled(o);
     const start = String(o.start ?? '09:00').trim() || '09:00';
     const end = String(o.end ?? '17:00').trim() || '17:00';
     out[k] = { enabled, start, end };

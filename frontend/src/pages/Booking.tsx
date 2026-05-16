@@ -31,9 +31,10 @@ export const Booking: React.FC = () => {
   const [checking, setChecking] = useState(false);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [message, setMessage] = useState<string>('');
-  /** Per-slot server availability for the selected day (false = booked / conflict / rules). */
-  const [slotOk, setSlotOk] = useState<Record<string, boolean>>({});
+  /** Per-slot server availability (undefined = not probed yet or probe failed). */
+  const [slotOk, setSlotOk] = useState<Record<string, boolean | undefined>>({});
   const [slotsProbeDone, setSlotsProbeDone] = useState(false);
+  const [slotsProbeError, setSlotsProbeError] = useState<string | null>(null);
 
   const minSelectableYmd = useMemo(() => todayYmdInTimeZone(tenantTz), [tenantTz]);
 
@@ -107,9 +108,11 @@ export const Booking: React.FC = () => {
     let cancelled = false;
     setSlotsProbeDone(false);
     setSlotOk({});
+    setSlotsProbeError(null);
 
     void (async () => {
-      const next: Record<string, boolean> = {};
+      const next: Record<string, boolean | undefined> = {};
+      let probeErrors = 0;
       await Promise.all(
         timeSlots.map(async (slot) => {
           if (isSlotInPastForTenant(dateIso, slot, tenantTz)) {
@@ -126,13 +129,20 @@ export const Booking: React.FC = () => {
             });
             next[slot] = res.available;
           } catch {
-            next[slot] = false;
+            probeErrors += 1;
           }
         })
       );
       if (!cancelled) {
         setSlotOk(next);
         setSlotsProbeDone(true);
+        if (probeErrors > 0) {
+          setSlotsProbeError(
+            probeErrors === timeSlots.length
+              ? 'Could not reach the server to check availability. Try again in a moment.'
+              : 'Some time slots could not be verified. Refresh or pick a slot to retry.'
+          );
+        }
       }
     })();
 
@@ -276,16 +286,17 @@ export const Booking: React.FC = () => {
               ) : (
                 timeSlots.map((slot) => {
                   const past = isSlotInPastForTenant(dateIso, slot, tenantTz);
-                  const canSelect = slotsProbeDone && !past && slotOk[slot] === true;
-                  const dead = !canSelect;
-                  const probing = !slotsProbeDone && !past;
+                  const loading = !past && !slotsProbeDone;
+                  const unavailable = !past && slotsProbeDone && slotOk[slot] === false;
+                  const unknown = !past && slotsProbeDone && slotOk[slot] === undefined;
+                  const canSelect = !past && slotsProbeDone && slotOk[slot] === true;
                   const isSelected = selectedTime === slot && canSelect;
                   return (
                     <button
                       key={slot}
                       type="button"
-                      disabled={dead}
-                      aria-busy={probing}
+                      disabled={!canSelect}
+                      aria-busy={loading}
                       onClick={() => {
                         if (!canSelect) return;
                         setSelectedTime(slot);
@@ -293,13 +304,14 @@ export const Booking: React.FC = () => {
                       }}
                       className={cn(
                         'rounded-xl border px-2 py-2.5 text-center text-[11px] font-semibold uppercase tracking-wide sm:text-xs',
-                        dead &&
-                          cn(
-                            'cursor-not-allowed border-slate-200/80 bg-slate-100 text-slate-400 opacity-70 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-600',
-                            past && 'opacity-55',
-                            probing && 'opacity-50'
-                          ),
-                        !dead &&
+                        (past || unavailable) &&
+                          'cursor-not-allowed border-slate-200/80 bg-slate-100 text-slate-400 opacity-70 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-600',
+                        past && 'opacity-55',
+                        loading &&
+                          'cursor-wait border-slate-200 bg-slate-50 text-slate-500 animate-pulse dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-400',
+                        unknown &&
+                          'cursor-pointer border-amber-200 bg-amber-50/80 text-amber-900 hover:border-amber-400 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100',
+                        canSelect &&
                           cn(
                             isSelected
                               ? 'border-blue-600 bg-blue-600 text-white shadow-md shadow-blue-600/25'
@@ -315,6 +327,9 @@ export const Booking: React.FC = () => {
             </div>
             {!slotsProbeDone && timeSlots.length > 0 && (
               <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Checking which times are still available…</p>
+            )}
+            {slotsProbeDone && slotsProbeError && (
+              <p className="mt-3 text-xs text-amber-800 dark:text-amber-200">{slotsProbeError}</p>
             )}
             {checking && <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">Checking slot...</p>}
             {selectedTime && !checking && message && (
