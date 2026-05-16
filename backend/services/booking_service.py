@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
-from backend.services.calendar_service import check_availability, create_event
+from backend.services.calendar_service import check_availability, create_event, tenant_schedule_allows
 from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.sms_service import send_sms
 
@@ -23,13 +23,25 @@ def check_availability_logic(
     blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
 ) -> dict:
-    if not calendar_id:
-        return {"available": False, "message": "Client setup incomplete"}
     duration_minutes = duration_minutes if duration_minutes > 0 else 30
     try:
         assert_booking_start_in_future(date, time, timezone_str)
     except BookingDatetimeError as exc:
         return {"available": False, "message": str(exc)}
+    if not calendar_id:
+        ok = tenant_schedule_allows(
+            date,
+            time,
+            timezone_str,
+            duration_minutes=duration_minutes,
+            weekly_availability=weekly_availability,
+            blocked_dates=blocked_dates,
+            working_hours=working_hours,
+        )
+        return {
+            "available": ok,
+            "message": "Available" if ok else "Slot not available",
+        }
     ok = check_availability(
         date,
         time,

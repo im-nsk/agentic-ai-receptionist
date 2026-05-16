@@ -94,6 +94,31 @@ def effective_weekly_availability(weekly_availability: Any, working_hours: Any) 
     return default_weekly_availability()
 
 
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off"):
+            return False
+    return bool(value)
+
+
+def _day_enabled(seg: Dict[str, Any]) -> bool:
+    """Accept legacy `open` or `enabled` keys from settings payloads."""
+    if "enabled" in seg:
+        return _coerce_bool(seg.get("enabled"), True)
+    if "open" in seg:
+        return _coerce_bool(seg.get("open"), True)
+    return True
+
+
 def normalize_weekly_availability(raw: Any) -> Dict[str, Dict[str, Any]]:
     """Ensure all seven keys with enabled + start + end strings."""
     src = raw if isinstance(raw, dict) else {}
@@ -102,7 +127,7 @@ def normalize_weekly_availability(raw: Any) -> Dict[str, Dict[str, Any]]:
         seg = src.get(k)
         if not isinstance(seg, dict):
             seg = {}
-        enabled = bool(seg.get("enabled", True))
+        enabled = _day_enabled(seg)
         start = str(seg.get("start", "09:00")).strip() or "09:00"
         end = str(seg.get("end", "17:00")).strip() or "17:00"
         out[k] = {"enabled": enabled, "start": start, "end": end}
@@ -125,6 +150,32 @@ def minutes_window_for_date(
     if sm is None or em is None or em <= sm:
         return None
     return sm, em
+
+
+def candidate_slot_times_for_date(
+    weekly_availability: Any,
+    working_hours: Any,
+    blocked_dates: Any,
+    date_iso: str,
+    duration_minutes: int,
+) -> list[str]:
+    """HH:MM labels on the booking grid for a day (before calendar filtering)."""
+    if is_date_blocked(blocked_dates, date_iso):
+        return []
+    win = minutes_window_for_date(weekly_availability, working_hours, date_iso)
+    if win is None:
+        return []
+    open_m, close_m = win
+    dur = max(1, int(duration_minutes) if duration_minutes else 30)
+    return [_minutes_to_hhmm(m) for m in range(open_m, close_m, dur)]
+
+
+def is_slot_on_duration_grid(mins: int, open_mins: int, duration_minutes: int) -> bool:
+    """Slot start aligns with duration steps from the day's open time (not midnight)."""
+    dur = max(1, int(duration_minutes) if duration_minutes else 30)
+    if mins < open_mins:
+        return False
+    return (mins - open_mins) % dur == 0
 
 
 def normalize_blocked_dates(raw: Any, *, max_items: int = 200) -> list[str]:
