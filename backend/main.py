@@ -76,14 +76,20 @@ def public_config():
 
 
 # ---------------- CORS ---------------- #
+_CORS_ORIGINS = [
+    "https://agentic-ai-receptionist-frontend.onrender.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://agentic-ai-receptionist-frontend.onrender.com"],
-    # JWT is sent via Authorization header, not cookies — False avoids CORS invalid
-    # "*"+"credentials:true" combinations and matches typical browser rules.
+    allow_origins=_CORS_ORIGINS,
+    # JWT is sent via Authorization header, not cookies — False avoids invalid
+    # wildcard-origin + credentials combinations and matches browser rules.
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
