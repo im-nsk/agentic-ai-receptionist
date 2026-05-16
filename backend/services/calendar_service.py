@@ -24,16 +24,31 @@ from backend.services.sheets_service import save_to_sheet
 
 
 # ---------------- GOOGLE CREDENTIALS ---------------- #
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+_calendar_api = None
 
-credentials = service_account.Credentials.from_service_account_info(
-    credentials_info,
-    scopes=SCOPES
-)
 
-service = build('calendar', 'v3', credentials=credentials)
+def get_calendar_api():
+    """Lazy Calendar API client; None when credentials are missing or invalid."""
+    global _calendar_api
+    if _calendar_api is not None:
+        return _calendar_api
+    raw = (os.getenv("GOOGLE_CREDENTIALS_JSON") or "").strip()
+    if not raw:
+        print("CALENDAR: GOOGLE_CREDENTIALS_JSON is not set")
+        return None
+    try:
+        credentials_info = json.loads(raw)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=SCOPES,
+        )
+        _calendar_api = build("calendar", "v3", credentials=credentials)
+        return _calendar_api
+    except Exception as e:
+        print("CALENDAR: failed to initialize API client:", repr(e))
+        return None
 
 
 class CalendarAccessNotGrantedError(Exception):
@@ -57,8 +72,13 @@ def verify_tenant_calendar_readable(calendar_id: str) -> None:
     time_min = now.isoformat()
     time_max = (now + timedelta(days=1)).isoformat()
 
+    cal_api = get_calendar_api()
+    if cal_api is None:
+        raise CalendarAccessNotGrantedError(
+            "Google Calendar credentials are not configured on the server."
+        )
     try:
-        service.events().list(
+        cal_api.events().list(
             calendarId=cal,
             timeMin=time_min,
             timeMax=time_max,
@@ -131,6 +151,20 @@ def _tenant_rules_ok(
     return True
 
 
+def _availability_payload(
+    available: bool,
+    *,
+    availability_check_failed: bool = False,
+    message: str = "",
+) -> dict:
+    return {
+        "available": bool(available),
+        "availability_check_failed": bool(availability_check_failed),
+        "message": message
+        or ("Available" if available else "Slot not available"),
+    }
+
+
 def _log_availability_check(
     *,
     date: str,
@@ -145,36 +179,41 @@ def _log_availability_check(
     final_ok: bool,
     busy_count: Optional[int] = None,
     calendar_error: Optional[str] = None,
+    calendar_id: Optional[str] = None,
 ) -> None:
-    date_str = str(date).strip()
-    candidates = candidate_slot_times_for_date(
-        weekly_availability,
-        working_hours,
-        blocked_dates,
-        date_str,
-        duration_minutes,
-    )
-    weekly_eff = effective_weekly_availability(weekly_availability, working_hours)
     try:
-        day_key = weekday_key_from_date_iso(date_str)
-    except Exception:
-        day_key = "?"
-    print(
-        "AVAILABILITY check:",
-        f"date={date_str!r}",
-        f"time={time!r}",
-        f"timezone={timezone!r}",
-        f"duration_min={duration_minutes}",
-        f"weekday={day_key!r}",
-        f"weekly_day={weekly_eff.get(day_key) if day_key else None!r}",
-        f"blocked_dates={normalize_blocked_dates(blocked_dates)!r}",
-        f"candidate_slots({len(candidates)})={candidates!r}",
-        f"tenant_rules_ok={tenant_ok}",
-        f"calendar_ok={calendar_ok}",
-        f"calendar_busy={busy_count}",
-        f"calendar_error={calendar_error!r}" if calendar_error else "calendar_error=None",
-        f"final_available={final_ok}",
-    )
+        date_str = str(date).strip()
+        candidates = candidate_slot_times_for_date(
+            weekly_availability,
+            working_hours,
+            blocked_dates,
+            date_str,
+            duration_minutes,
+        )
+        weekly_eff = effective_weekly_availability(weekly_availability, working_hours)
+        try:
+            day_key = weekday_key_from_date_iso(date_str)
+        except Exception:
+            day_key = "?"
+        print(
+            "AVAILABILITY check:",
+            f"calendar_id={calendar_id!r}",
+            f"date={date_str!r}",
+            f"time={time!r}",
+            f"timezone={timezone!r}",
+            f"duration_min={duration_minutes}",
+            f"weekday={day_key!r}",
+            f"weekly_day={weekly_eff.get(day_key) if day_key in weekly_eff else None!r}",
+            f"blocked_dates={normalize_blocked_dates(blocked_dates)!r}",
+            f"candidate_slots({len(candidates)})={candidates!r}",
+            f"tenant_rules_ok={tenant_ok}",
+            f"calendar_ok={calendar_ok}",
+            f"calendar_busy={busy_count}",
+            f"calendar_error={calendar_error!r}" if calendar_error else "calendar_error=None",
+            f"final_available={final_ok}",
+        )
+    except Exception as e:
+        print("AVAILABILITY log error:", repr(e))
 
 
 def tenant_schedule_allows(
@@ -216,7 +255,9 @@ def check_availability(
     weekly_availability: Optional[Any] = None,
     blocked_dates: Optional[Any] = None,
     working_hours: Optional[Any] = None,
-):
+) -> dict:
+    cal_id = (calendar_id or "").strip() or None
+    duration_minutes = duration_minutes or 30
 
     try:
         booking_dt = parse_datetime(date, time, timezone)
@@ -225,7 +266,7 @@ def check_availability(
             date=str(date),
             time=str(time),
             timezone=str(timezone),
-            duration_minutes=duration_minutes or 30,
+            duration_minutes=duration_minutes,
             weekly_availability=weekly_availability,
             blocked_dates=blocked_dates,
             working_hours=working_hours,
@@ -233,16 +274,14 @@ def check_availability(
             calendar_ok=None,
             final_ok=False,
             calendar_error="invalid_date_or_time",
+            calendar_id=cal_id,
         )
-        return False
+        return _availability_payload(False, message="Invalid date or time.")
 
-    duration_minutes = duration_minutes or 30
     date_str = str(date).strip()
-
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
     end_time = start_time + timedelta(minutes=duration_minutes)
 
-    # Past
     if start_time <= datetime.now(ZoneInfo("UTC")):
         _log_availability_check(
             date=date_str,
@@ -256,17 +295,26 @@ def check_availability(
             calendar_ok=None,
             final_ok=False,
             calendar_error="slot_in_past",
+            calendar_id=cal_id,
         )
-        return False
+        return _availability_payload(
+            False,
+            message="That time has already passed for your business timezone.",
+        )
 
-    tenant_ok = _tenant_rules_ok(
-        booking_dt,
-        date_str,
-        duration_minutes,
-        weekly_availability,
-        blocked_dates,
-        working_hours,
-    )
+    try:
+        tenant_ok = _tenant_rules_ok(
+            booking_dt,
+            date_str,
+            duration_minutes,
+            weekly_availability,
+            blocked_dates,
+            working_hours,
+        )
+    except Exception as e:
+        print("AVAILABILITY tenant_rules error:", repr(e), f"date={date_str!r}")
+        tenant_ok = False
+
     if not tenant_ok:
         _log_availability_check(
             date=date_str,
@@ -279,10 +327,11 @@ def check_availability(
             tenant_ok=False,
             calendar_ok=None,
             final_ok=False,
+            calendar_id=cal_id,
         )
-        return False
+        return _availability_payload(False)
 
-    if not calendar_id:
+    if not cal_id:
         _log_availability_check(
             date=date_str,
             time=str(time),
@@ -295,35 +344,53 @@ def check_availability(
             calendar_ok=None,
             final_ok=True,
             calendar_error="no_calendar_id_schedule_only",
+            calendar_id=cal_id,
         )
-        return True
+        return _availability_payload(True)
 
     calendar_ok: Optional[bool] = None
     busy_count: Optional[int] = None
     calendar_error: Optional[str] = None
-    try:
-        events = service.events().list(
-            calendarId=calendar_id,
-            timeMin=start_time.isoformat(),
-            timeMax=end_time.isoformat(),
-            singleEvents=True,
-        ).execute()
-        busy_count = len(events.get("items", []))
-        calendar_ok = busy_count == 0
-    except HttpError as e:
-        calendar_error = google_http_error_message(e)
-        print(
-            "AVAILABILITY calendar HttpError:",
-            f"status={google_http_status(e)}",
-            f"calendar_id={calendar_id!r}",
-            f"api_message={calendar_error!r}",
-        )
+    cal_api = get_calendar_api()
+    if cal_api is None:
+        calendar_error = "google_credentials_not_configured"
         calendar_ok = True
-    except Exception as e:
-        calendar_error = repr(e)
-        print("AVAILABILITY calendar unexpected:", calendar_error, f"calendar_id={calendar_id!r}")
-        calendar_ok = True
+    else:
+        try:
+            events = cal_api.events().list(
+                calendarId=cal_id,
+                timeMin=start_time.isoformat(),
+                timeMax=end_time.isoformat(),
+                singleEvents=True,
+            ).execute()
+            busy_count = len(events.get("items", []))
+            calendar_ok = busy_count == 0
+            print(
+                "AVAILABILITY calendar list:",
+                f"calendar_id={cal_id!r}",
+                f"busy_count={busy_count}",
+                f"timeMin={start_time.isoformat()!r}",
+                f"timeMax={end_time.isoformat()!r}",
+            )
+        except HttpError as e:
+            calendar_error = google_http_error_message(e)
+            print(
+                "AVAILABILITY calendar HttpError:",
+                f"status={google_http_status(e)}",
+                f"calendar_id={cal_id!r}",
+                f"api_message={calendar_error!r}",
+            )
+            calendar_ok = True
+        except Exception as e:
+            calendar_error = repr(e)
+            print(
+                "AVAILABILITY calendar unexpected:",
+                calendar_error,
+                f"calendar_id={cal_id!r}",
+            )
+            calendar_ok = True
 
+    calendar_failed = bool(calendar_error)
     final_ok = bool(tenant_ok and calendar_ok)
     _log_availability_check(
         date=date_str,
@@ -338,8 +405,15 @@ def check_availability(
         final_ok=final_ok,
         busy_count=busy_count,
         calendar_error=calendar_error,
+        calendar_id=cal_id,
     )
-    return final_ok
+    if calendar_failed:
+        return _availability_payload(
+            tenant_ok,
+            availability_check_failed=True,
+            message="Calendar check unavailable; using schedule-only availability.",
+        )
+    return _availability_payload(final_ok)
 
 
 # ---------------- CREATE EVENT ---------------- #
@@ -377,7 +451,7 @@ def create_event(
             weekly_availability=weekly_availability,
             blocked_dates=blocked_dates,
             working_hours=working_hours,
-        ):
+        ).get("available"):
             return False
 
         start_time = booking_dt
@@ -396,7 +470,12 @@ def create_event(
             },
         }
 
-        service.events().insert(
+        cal_api = get_calendar_api()
+        if cal_api is None:
+            print("CREATE EVENT: calendar API not configured")
+            return False
+
+        cal_api.events().insert(
             calendarId=calendar_id,
             body=event
         ).execute()

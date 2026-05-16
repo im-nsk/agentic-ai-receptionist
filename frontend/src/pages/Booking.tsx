@@ -35,6 +35,7 @@ export const Booking: React.FC = () => {
   const [slotOk, setSlotOk] = useState<Record<string, boolean | undefined>>({});
   const [slotsProbeDone, setSlotsProbeDone] = useState(false);
   const [slotsProbeError, setSlotsProbeError] = useState<string | null>(null);
+  const [calendarCheckDegraded, setCalendarCheckDegraded] = useState(false);
 
   const minSelectableYmd = useMemo(() => todayYmdInTimeZone(tenantTz), [tenantTz]);
 
@@ -109,10 +110,12 @@ export const Booking: React.FC = () => {
     setSlotsProbeDone(false);
     setSlotOk({});
     setSlotsProbeError(null);
+    setCalendarCheckDegraded(false);
 
     void (async () => {
       const next: Record<string, boolean | undefined> = {};
       let probeErrors = 0;
+      let calendarDegraded = false;
       await Promise.all(
         timeSlots.map(async (slot) => {
           if (isSlotInPastForTenant(dateIso, slot, tenantTz)) {
@@ -128,6 +131,7 @@ export const Booking: React.FC = () => {
               time: slot,
             });
             next[slot] = res.available;
+            if (res.availability_check_failed) calendarDegraded = true;
           } catch {
             probeErrors += 1;
           }
@@ -136,6 +140,7 @@ export const Booking: React.FC = () => {
       if (!cancelled) {
         setSlotOk(next);
         setSlotsProbeDone(true);
+        setCalendarCheckDegraded(calendarDegraded);
         if (probeErrors > 0) {
           setSlotsProbeError(
             probeErrors === timeSlots.length
@@ -327,6 +332,11 @@ export const Booking: React.FC = () => {
             </div>
             {!slotsProbeDone && timeSlots.length > 0 && (
               <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">Checking which times are still available…</p>
+            )}
+            {slotsProbeDone && calendarCheckDegraded && !slotsProbeError && (
+              <p className="mt-3 text-xs text-amber-800 dark:text-amber-200">
+                Google Calendar could not be checked — showing schedule-only availability. Conflicts may still exist until calendar access is restored.
+              </p>
             )}
             {slotsProbeDone && slotsProbeError && (
               <p className="mt-3 text-xs text-amber-800 dark:text-amber-200">{slotsProbeError}</p>

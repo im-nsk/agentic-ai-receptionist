@@ -1,8 +1,26 @@
 import uuid
+from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.services.phone_validation import normalize_and_validate_phone
+
+
+class AvailabilityCheckRequest(BaseModel):
+    """Lightweight body for /check-availability (ignores legacy booking fields)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    date: str
+    time: str
+    client_id: Optional[uuid.UUID] = None
+    name: Optional[str] = None
+    phone: Optional[str] = None
+
+    @field_validator("date", "time")
+    @classmethod
+    def _strip_datetime_fields(cls, value: str) -> str:
+        return value.strip()
 
 
 class BookingRequest(BaseModel):
