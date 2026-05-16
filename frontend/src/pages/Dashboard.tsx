@@ -93,6 +93,8 @@ export const Dashboard: React.FC = () => {
     [toast]
   );
 
+  const recent = bookings.slice(0, 12);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -116,7 +118,6 @@ export const Dashboard: React.FC = () => {
   const trends = showMetrics ? a.last_7_days_confirmed_counts : [];
   const dayLabels = showMetrics ? a.last_7_days_labels : [];
   const maxTrend = Math.max(...trends, 1);
-  const recent = bookings.slice(0, 12);
 
   const emptyMessage =
     !setupComplete && bookings.length === 0
