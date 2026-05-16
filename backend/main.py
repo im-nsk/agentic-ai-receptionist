@@ -39,11 +39,13 @@ from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.email_service import send_email_otp, send_password_reset_email
 from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
 from backend.services.sheets_service import (
+    SheetAccessNotGrantedError,
     delete_booking_data_row,
     ensure_booking_sheet_headers,
     get_data_row_cells,
     list_booking_rows_for_dashboard,
     patch_booking_data_row,
+    verify_tenant_sheet_readable,
 )
 
 # ---------------- INIT ---------------- #
@@ -441,29 +443,41 @@ def setup(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    sheet_err_share = "Please share the Google Sheet with the service account email and try again."
-    cal_err_share = "Please share your Google Calendar with the service account email and try again."
-
     sheet_in = ((payload.sheet_id or "").strip() if payload.sheet_id else "") or ((client.sheet_id or "").strip())
     if not sheet_in:
         raise HTTPException(status_code=400, detail="Please enter your Google Sheet ID.")
 
-    try:
-        ensure_booking_sheet_headers(sheet_in)
-    except Exception as e:
-        print("SETUP SHEET ACCESS:", repr(e))
-        raise HTTPException(status_code=400, detail=sheet_err_share) from e
-
     cal_trim = payload.calendar_id.strip()
+    print("SETUP start:", f"client_id={client_id}", f"sheet_id={sheet_in!r}", f"calendar_id={cal_trim!r}")
+
+    try:
+        verify_tenant_sheet_readable(sheet_in)
+    except SheetAccessNotGrantedError as e:
+        print("SETUP failed step=sheet_read:", str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     try:
         verify_tenant_calendar_readable(cal_trim)
     except CalendarAccessNotGrantedError as e:
-        raise HTTPException(status_code=400, detail=cal_err_share) from e
+        print("SETUP failed step=calendar_read:", str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        print("SETUP CALENDAR VERIFY:", repr(e))
+        print("SETUP failed step=calendar_read unexpected:", repr(e))
         raise HTTPException(
             status_code=502,
-            detail="Could not verify Google Calendar. Try again in a moment or contact support if this persists.",
+            detail=f"Could not verify Google Calendar: {e}",
+        ) from e
+
+    try:
+        ensure_booking_sheet_headers(sheet_in)
+    except Exception as e:
+        print("SETUP failed step=sheet_headers:", f"sheet_id={sheet_in!r}", repr(e))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Sheet is reachable but header setup failed: {e}. "
+                "Grant Editor access to the booking service account."
+            ),
         ) from e
 
     client.client_phone = payload.client_phone
