@@ -9,7 +9,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import gspread
+from gspread.exceptions import APIError, SpreadsheetNotFound
 from google.oauth2 import service_account
+
+from backend.services.google_errors import gspread_api_error_message
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -32,6 +35,56 @@ _N_COL = len(BOOKING_HEADERS)
 _credentials_info = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON", "{}") or "{}")
 _credentials = service_account.Credentials.from_service_account_info(_credentials_info, scopes=SCOPES)
 _client = gspread.authorize(_credentials)
+
+
+class SheetAccessNotGrantedError(Exception):
+    """Raised when the service account cannot read the tenant spreadsheet."""
+
+
+def verify_tenant_sheet_readable(sheet_id: str) -> None:
+    """
+    Read-only check: open spreadsheet by ID, read metadata and first worksheet row 1.
+    Does not create sheets or modify headers.
+    """
+    sid = (sheet_id or "").strip()
+    if not sid:
+        raise SheetAccessNotGrantedError("Google Sheet ID is required.")
+    try:
+        spreadsheet = _client.open_by_key(sid)
+        title = spreadsheet.title
+        ws = spreadsheet.sheet1
+        ws_title = ws.title
+        _ = ws.row_values(1)
+        print(
+            "SETUP sheet verify ok:",
+            f"sheet_id={sid!r}",
+            f"spreadsheet_title={title!r}",
+            f"first_worksheet={ws_title!r}",
+        )
+    except SpreadsheetNotFound as e:
+        print("SETUP sheet SpreadsheetNotFound:", f"sheet_id={sid!r}", repr(e))
+        raise SheetAccessNotGrantedError(
+            f"Spreadsheet not found or not shared with the service account (id={sid}). "
+            "Share the sheet with Editor access and paste the ID from the sheet URL."
+        ) from e
+    except APIError as e:
+        msg = gspread_api_error_message(e)
+        code = getattr(getattr(e, "response", None), "status_code", None)
+        print(
+            "SETUP sheet APIError:",
+            f"sheet_id={sid!r}",
+            f"status={code!r}",
+            f"api_message={msg!r}",
+            repr(e),
+        )
+        raise SheetAccessNotGrantedError(
+            f"Cannot access Google Sheet (id={sid}): {msg}"
+            + (f" (HTTP {code})" if code else "")
+            + ". Share the sheet with the booking service account (Editor)."
+        ) from e
+    except Exception as e:
+        print("SETUP sheet verify unexpected:", f"sheet_id={sid!r}", repr(e))
+        raise SheetAccessNotGrantedError(f"Could not access Google Sheet: {e}") from e
 
 
 def _header_range_a1() -> str:

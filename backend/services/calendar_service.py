@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from dateutil import parser
 
+from backend.services.google_errors import google_http_error_message, google_http_status
 from backend.services.availability_rules import (
     is_date_blocked,
     minutes_window_for_date,
@@ -36,20 +37,50 @@ class CalendarAccessNotGrantedError(Exception):
 
 def verify_tenant_calendar_readable(calendar_id: str) -> None:
     """
-    Confirms Google Calendar API can read the calendar (sharing + correct calendar ID).
-    Raises CalendarAccessNotGrantedError for typical access-denied responses.
-    """
+    Confirms the service account can read events on the tenant calendar (same API as booking).
+    Accepts the owner's email as calendar ID (e.g. user@gmail.com). Does not use "primary".
+  """
     cal = (calendar_id or "").strip()
     if not cal:
-        raise CalendarAccessNotGrantedError("empty calendar id")
+        raise CalendarAccessNotGrantedError("Calendar ID is required.")
+    if cal.lower() == "primary":
+        raise CalendarAccessNotGrantedError(
+            'Use your Google account email as the Calendar ID (e.g. you@gmail.com), not "primary".'
+        )
+
+    now = datetime.now(timezone.utc)
+    time_min = now.isoformat()
+    time_max = (now + timedelta(days=1)).isoformat()
+
     try:
-        service.calendars().get(calendarId=cal).execute()
+        service.events().list(
+            calendarId=cal,
+            timeMin=time_min,
+            timeMax=time_max,
+            maxResults=1,
+            singleEvents=True,
+        ).execute()
     except HttpError as e:
-        code = getattr(e.resp, "status", None) or 0
+        code = google_http_status(e)
+        api_msg = google_http_error_message(e)
+        print(
+            "SETUP calendar HttpError:",
+            f"status={code}",
+            f"calendar_id={cal!r}",
+            f"api_message={api_msg!r}",
+            f"body={e.content!r}",
+        )
         if code in (403, 404):
-            raise CalendarAccessNotGrantedError(str(e)) from e
-        raise
+            raise CalendarAccessNotGrantedError(
+                f"Cannot read Google Calendar {cal!r}: {api_msg} (HTTP {code}). "
+                "Use your Google account email as the Calendar ID and share that calendar with the "
+                "booking service account (at least See all event details)."
+            ) from e
+        raise CalendarAccessNotGrantedError(
+            f"Google Calendar API error for {cal!r}: {api_msg} (HTTP {code})."
+        ) from e
     except Exception as e:
+        print("SETUP calendar verify unexpected:", repr(e), f"calendar_id={cal!r}")
         raise RuntimeError(f"Calendar verification failed: {e!r}") from e
 
 
