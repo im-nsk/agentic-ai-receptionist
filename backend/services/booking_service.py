@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from backend.services.availability_rules import candidate_slot_times_for_date
 from backend.services.booking_datetime import BookingDatetimeError, assert_booking_start_in_future
-from backend.services.calendar_service import check_availability, create_event, tenant_schedule_allows
+from backend.services.calendar_service import (
+    check_availability,
+    check_day_availability,
+    create_event,
+    tenant_schedule_allows,
+)
 from backend.services.phone_validation import normalize_and_validate_phone
 from backend.services.sms_service import send_sms
 
@@ -102,6 +107,52 @@ def check_availability_logic(
             "available": ok,
             "availability_check_failed": True,
             "message": "Calendar check unavailable; using schedule-only availability.",
+        }
+
+
+def check_day_availability_logic(
+    *,
+    date: str,
+    calendar_id: Optional[str],
+    timezone_str: str,
+    duration_minutes: int,
+    weekly_availability: Optional[Any] = None,
+    blocked_dates: Optional[Any] = None,
+    working_hours: Optional[Any] = None,
+) -> dict:
+    date_str = (date or "").strip()
+    tz = (timezone_str or "").strip() or "America/New_York"
+    duration_minutes = duration_minutes if duration_minutes > 0 else 30
+    cal_id = (calendar_id or "").strip() or None
+
+    print(
+        "CHECK-DAY logic:",
+        f"calendar_id={cal_id!r}",
+        f"timezone={tz!r}",
+        f"date={date_str!r}",
+        f"duration_min={duration_minutes}",
+    )
+
+    try:
+        return check_day_availability(
+            date_str,
+            cal_id,
+            tz,
+            duration_minutes=duration_minutes,
+            weekly_availability=weekly_availability,
+            blocked_dates=blocked_dates,
+            working_hours=working_hours,
+        )
+    except Exception as e:
+        print("CHECK-DAY logic error:", repr(e))
+        import traceback
+
+        traceback.print_exc()
+        return {
+            "slots": {},
+            "availability_check_failed": True,
+            "message": "Availability check temporarily unavailable",
+            "error": repr(e),
         }
 
 

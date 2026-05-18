@@ -23,6 +23,20 @@ class AvailabilityCheckRequest(BaseModel):
         return value.strip()
 
 
+class AvailabilityDayRequest(BaseModel):
+    """Batch availability for every slot on a calendar day."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    date: str
+    client_id: Optional[uuid.UUID] = None
+
+    @field_validator("date")
+    @classmethod
+    def _strip_date(cls, value: str) -> str:
+        return value.strip()
+
+
 class BookingRequest(BaseModel):
     client_id: uuid.UUID
     name: str = Field(..., min_length=2)

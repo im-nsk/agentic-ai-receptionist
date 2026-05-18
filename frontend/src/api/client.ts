@@ -1,13 +1,24 @@
 import axios from 'axios';
 import { getToken, isTokenExpired, logout } from '@/utils/auth';
 
-const envUrl = import.meta.env.VITE_API_URL;
-const BASE_URL =
-  (typeof envUrl === 'string' ? envUrl : '').replace(/\/$/, '') ||
-  (import.meta.env.DEV ? 'http://localhost:10000' : '');
+/** Production backend (used when VITE_API_URL is missing at build time). */
+const DEFAULT_PRODUCTION_API = 'https://agentic-ai-receptionist.onrender.com';
+
+function resolveApiBaseUrl(): string {
+  const fromEnv = (import.meta.env.VITE_API_URL ?? '').trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  if (import.meta.env.DEV) return 'http://localhost:10000';
+  return DEFAULT_PRODUCTION_API;
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
+
+if (import.meta.env.DEV) {
+  console.info('[api] base URL:', API_BASE_URL);
+}
 
 export const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: API_BASE_URL,
   timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
@@ -33,7 +44,9 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     const skipAuth = (err.config as { skipAuth?: boolean } | undefined)?.skipAuth === true;
-    if (err.response?.status === 401 && !skipAuth) {
+    const url = String((err.config as { url?: string } | undefined)?.url ?? '');
+    const isAvailabilityProbe = url.includes('check-availability');
+    if (err.response?.status === 401 && !skipAuth && !isAvailabilityProbe) {
       logout();
     }
 
@@ -139,6 +152,13 @@ export interface AvailabilityResponse {
   available: boolean;
   message: string;
   availability_check_failed?: boolean;
+}
+
+export interface DayAvailabilityResponse {
+  slots: Record<string, boolean>;
+  message?: string;
+  availability_check_failed?: boolean;
+  error?: string;
 }
 
 export interface BookResponse {
@@ -249,6 +269,12 @@ export async function deleteBooking(rowId: number) {
 
 export async function checkAvailability(payload: AppointmentPayload) {
   const { data } = await api.post<AvailabilityResponse>('/check-availability', payload);
+  return data;
+}
+
+/** One request returns availability for every slot on a day (avoids N parallel probes). */
+export async function checkDayAvailability(date: string) {
+  const { data } = await api.post<DayAvailabilityResponse>('/check-availability/day', { date });
   return data;
 }
 

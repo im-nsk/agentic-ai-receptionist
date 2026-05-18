@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from google.oauth2 import service_account
@@ -11,6 +11,7 @@ from dateutil import parser
 
 from backend.services.google_errors import google_http_error_message, google_http_status
 from backend.services.availability_rules import (
+    candidate_slot_labels_12h_for_date,
     candidate_slot_times_for_date,
     effective_weekly_availability,
     is_date_blocked,
@@ -414,6 +415,177 @@ def check_availability(
             message="Calendar check unavailable; using schedule-only availability.",
         )
     return _availability_payload(final_ok)
+
+
+def _parse_google_event_bounds(ev: dict, fallback_tz: str) -> Optional[tuple[datetime, datetime]]:
+    """Return (start_utc, end_utc) for a Google Calendar event item."""
+    start_obj = ev.get("start") or {}
+    end_obj = ev.get("end") or {}
+    start_raw = start_obj.get("dateTime") or start_obj.get("date")
+    end_raw = end_obj.get("dateTime") or end_obj.get("date")
+    if not start_raw or not end_raw:
+        return None
+    try:
+        start_dt = parser.parse(str(start_raw))
+        end_dt = parser.parse(str(end_raw))
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=ZoneInfo(fallback_tz))
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=ZoneInfo(fallback_tz))
+        return start_dt.astimezone(ZoneInfo("UTC")), end_dt.astimezone(ZoneInfo("UTC"))
+    except Exception:
+        return None
+
+
+def _slot_overlaps_events(
+    slot_start_utc: datetime,
+    slot_end_utc: datetime,
+    events: list,
+    fallback_tz: str,
+) -> bool:
+    for ev in events:
+        bounds = _parse_google_event_bounds(ev, fallback_tz)
+        if not bounds:
+            continue
+        ev_start, ev_end = bounds
+        if slot_start_utc < ev_end and slot_end_utc > ev_start:
+            return True
+    return False
+
+
+def check_day_availability(
+    date_str: str,
+    calendar_id: Optional[str],
+    timezone: str,
+    duration_minutes: int = 30,
+    weekly_availability: Optional[Any] = None,
+    blocked_dates: Optional[Any] = None,
+    working_hours: Optional[Any] = None,
+) -> dict:
+    """One request checks every slot for a day (single Google Calendar list call)."""
+    date_str = str(date_str).strip()
+    cal_id = (calendar_id or "").strip() or None
+    tz = (timezone or "").strip() or "America/New_York"
+    duration_minutes = duration_minutes or 30
+
+    labels = candidate_slot_labels_12h_for_date(
+        weekly_availability,
+        working_hours,
+        blocked_dates,
+        date_str,
+        duration_minutes,
+    )
+    print(
+        "CHECK-DAY-AVAILABILITY:",
+        f"calendar_id={cal_id!r}",
+        f"date={date_str!r}",
+        f"timezone={tz!r}",
+        f"duration_min={duration_minutes}",
+        f"generated_slots={len(labels)}",
+        f"labels={labels!r}",
+    )
+
+    slots: Dict[str, bool] = {}
+    calendar_error: Optional[str] = None
+    events: list = []
+    now_utc = datetime.now(ZoneInfo("UTC"))
+
+    win = minutes_window_for_date(weekly_availability, working_hours, date_str)
+    day_start_utc = None
+    day_end_utc = None
+    if win and labels:
+        try:
+            day_start_utc = parse_datetime(date_str, labels[0], tz).astimezone(ZoneInfo("UTC"))
+            last = labels[-1]
+            last_dt = parse_datetime(date_str, last, tz).astimezone(ZoneInfo("UTC"))
+            day_end_utc = last_dt + timedelta(minutes=duration_minutes)
+        except Exception:
+            day_start_utc = None
+            day_end_utc = None
+
+    if cal_id and day_start_utc and day_end_utc:
+        cal_api = get_calendar_api()
+        if cal_api is None:
+            calendar_error = "google_credentials_not_configured"
+        else:
+            try:
+                result = cal_api.events().list(
+                    calendarId=cal_id,
+                    timeMin=day_start_utc.isoformat(),
+                    timeMax=day_end_utc.isoformat(),
+                    singleEvents=True,
+                    orderBy="startTime",
+                ).execute()
+                events = list(result.get("items", []))
+                print(
+                    "CHECK-DAY-AVAILABILITY calendar:",
+                    f"events_fetched={len(events)}",
+                    f"timeMin={day_start_utc.isoformat()!r}",
+                    f"timeMax={day_end_utc.isoformat()!r}",
+                )
+            except HttpError as e:
+                calendar_error = google_http_error_message(e)
+                print(
+                    "CHECK-DAY-AVAILABILITY calendar HttpError:",
+                    f"status={google_http_status(e)}",
+                    f"api_message={calendar_error!r}",
+                )
+            except Exception as e:
+                calendar_error = repr(e)
+                print("CHECK-DAY-AVAILABILITY calendar unexpected:", calendar_error)
+
+    for label in labels:
+        try:
+            booking_dt = parse_datetime(date_str, label, tz)
+        except Exception:
+            slots[label] = False
+            continue
+
+        slot_start = booking_dt.astimezone(ZoneInfo("UTC"))
+        slot_end = slot_start + timedelta(minutes=duration_minutes)
+        if slot_start <= now_utc:
+            slots[label] = False
+            continue
+
+        try:
+            tenant_ok = _tenant_rules_ok(
+                booking_dt,
+                date_str,
+                duration_minutes,
+                weekly_availability,
+                blocked_dates,
+                working_hours,
+            )
+        except Exception:
+            tenant_ok = False
+
+        if not tenant_ok:
+            slots[label] = False
+            continue
+
+        if calendar_error or not cal_id:
+            slots[label] = True
+        else:
+            slots[label] = not _slot_overlaps_events(slot_start, slot_end, events, tz)
+
+    available_count = sum(1 for v in slots.values() if v)
+    print(
+        "CHECK-DAY-AVAILABILITY result:",
+        f"available_count={available_count}",
+        f"total={len(slots)}",
+        f"availability_check_failed={bool(calendar_error)}",
+    )
+
+    return {
+        "slots": slots,
+        "availability_check_failed": bool(calendar_error),
+        "message": (
+            "Calendar check unavailable; using schedule-only availability."
+            if calendar_error
+            else "ok"
+        ),
+        "error": calendar_error,
+    }
 
 
 # ---------------- CREATE EVENT ---------------- #
