@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BookResponse, bookAppointment, checkAvailability } from '@/api/client';
+import { BookResponse, bookAppointment, checkAvailability, checkDayAvailability } from '@/api/client';
 import { cn } from '@/utils/cn';
 import { getApiErrorMessage } from '@/api/errors';
 import { MonthCalendar } from '@/components/MonthCalendar';
@@ -114,38 +114,30 @@ export const Booking: React.FC = () => {
 
     void (async () => {
       const next: Record<string, boolean | undefined> = {};
-      let probeErrors = 0;
-      let calendarDegraded = false;
-      await Promise.all(
-        timeSlots.map(async (slot) => {
-          if (isSlotInPastForTenant(dateIso, slot, tenantTz)) {
-            next[slot] = false;
-            return;
+      for (const slot of timeSlots) {
+        if (isSlotInPastForTenant(dateIso, slot, tenantTz)) {
+          next[slot] = false;
+        }
+      }
+      try {
+        const res = await checkDayAvailability(dateIso);
+        if (!cancelled) {
+          for (const slot of timeSlots) {
+            if (next[slot] === false) continue;
+            if (Object.prototype.hasOwnProperty.call(res.slots, slot)) {
+              next[slot] = res.slots[slot];
+            }
           }
-          try {
-            const res = await checkAvailability({
-              client_id: clientId,
-              name: 'check',
-              phone: '0000000000',
-              date: dateIso,
-              time: slot,
-            });
-            next[slot] = res.available;
-            if (res.availability_check_failed) calendarDegraded = true;
-          } catch {
-            probeErrors += 1;
-          }
-        })
-      );
-      if (!cancelled) {
-        setSlotOk(next);
-        setSlotsProbeDone(true);
-        setCalendarCheckDegraded(calendarDegraded);
-        if (probeErrors > 0) {
+          setSlotOk(next);
+          setSlotsProbeDone(true);
+          setCalendarCheckDegraded(Boolean(res.availability_check_failed));
+        }
+      } catch {
+        if (!cancelled) {
+          setSlotOk(next);
+          setSlotsProbeDone(true);
           setSlotsProbeError(
-            probeErrors === timeSlots.length
-              ? 'Could not reach the server to check availability. Try again in a moment.'
-              : 'Some time slots could not be verified. Refresh or pick a slot to retry.'
+            'Could not reach the server to check availability. Try again in a moment.'
           );
         }
       }
@@ -154,7 +146,7 @@ export const Booking: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [dateIso, slotsLayoutKey, tenantTz, timeSlots]);
+  }, [dateIso, slotsLayoutKey, tenantTz]);
 
   useEffect(() => {
     if (!selectedTime) return;

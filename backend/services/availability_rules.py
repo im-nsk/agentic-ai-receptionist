@@ -43,6 +43,18 @@ def _minutes_to_hhmm(total: int) -> str:
     return f"{h:02d}:{mm:02d}"
 
 
+def _minutes_to_12h_label(total_minutes: int) -> str:
+    """Match frontend format12FromMinutes (e.g. 9:00 AM)."""
+    t = ((total_minutes % (24 * 60)) + 24 * 60) % (24 * 60)
+    h24 = t // 60
+    minute = t % 60
+    ampm = "AM" if h24 < 12 else "PM"
+    h12 = h24 % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12}:{minute:02d} {ampm}"
+
+
 def weekday_key_from_date_iso(date_iso: str) -> str:
     d = date_cls.fromisoformat(date_iso.strip())
     return DAY_KEYS[d.weekday()]
@@ -168,6 +180,24 @@ def candidate_slot_times_for_date(
     open_m, close_m = win
     dur = max(1, int(duration_minutes) if duration_minutes else 30)
     return [_minutes_to_hhmm(m) for m in range(open_m, close_m, dur)]
+
+
+def candidate_slot_labels_12h_for_date(
+    weekly_availability: Any,
+    working_hours: Any,
+    blocked_dates: Any,
+    date_iso: str,
+    duration_minutes: int,
+) -> list[str]:
+    """12-hour slot labels aligned with the frontend booking grid."""
+    if is_date_blocked(blocked_dates, date_iso):
+        return []
+    win = minutes_window_for_date(weekly_availability, working_hours, date_iso)
+    if win is None:
+        return []
+    open_m, close_m = win
+    dur = max(1, int(duration_minutes) if duration_minutes else 30)
+    return [_minutes_to_12h_label(m) for m in range(open_m, close_m, dur)]
 
 
 def is_slot_on_duration_grid(mins: int, open_mins: int, duration_minutes: int) -> bool:
