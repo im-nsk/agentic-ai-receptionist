@@ -6,14 +6,17 @@ from __future__ import annotations
 
 import os
 import secrets
+import traceback
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.db.database import SessionLocal, engine
 from backend.db.migrate import migrate_schema
@@ -51,6 +54,61 @@ from backend.services.sheets_service import (
 # ---------------- INIT ---------------- #
 app = FastAPI()
 
+# ---------------- CORS (register before routes; permissive headers for axios preflight) ---------------- #
+_CORS_ORIGINS_EXPLICIT = [
+    "https://agentic-ai-receptionist-frontend.onrender.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+# Set CORS_ALLOW_ALL=false in production once origins are confirmed.
+_CORS_ALLOW_ALL = os.getenv("CORS_ALLOW_ALL", "true").lower() in ("1", "true", "yes")
+_CORS_ORIGINS: List[str] = ["*"] if _CORS_ALLOW_ALL else _CORS_ORIGINS_EXPLICIT
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=(
+        None if _CORS_ALLOW_ALL else r"https://[a-z0-9-]+\.onrender\.com"
+    ),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,
+)
+
+
+class _RequestLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin", "")
+        if request.method == "OPTIONS" or request.url.path in (
+            "/check-availability",
+            "/health",
+        ):
+            print(
+                "HTTP request:",
+                f"method={request.method}",
+                f"path={request.url.path}",
+                f"origin={origin!r}",
+            )
+        response = await call_next(request)
+        if request.method == "OPTIONS" or request.url.path in (
+            "/check-availability",
+            "/health",
+        ):
+            acao = response.headers.get("access-control-allow-origin", "")
+            print(
+                "HTTP response:",
+                f"method={request.method}",
+                f"path={request.url.path}",
+                f"status={response.status_code}",
+                f"access-control-allow-origin={acao!r}",
+            )
+        return response
+
+
+app.add_middleware(_RequestLogMiddleware)
+
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "my-secret-123")
 
 if os.getenv("APP_ENV", "").lower() in ("production", "prod") and VAPI_API_KEY == "my-secret-123":
@@ -75,22 +133,56 @@ def public_config():
     return PublicConfigResponse(google_booking_service_account_email=get_booking_service_account_email())
 
 
-# ---------------- CORS ---------------- #
-_CORS_ORIGINS = [
-    "https://agentic-ai-receptionist-frontend.onrender.com",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
-    # JWT is sent via Authorization header, not cookies — False avoids invalid
-    # wildcard-origin + credentials combinations and matches browser rules.
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
-)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    if request.url.path == "/check-availability":
+        print("CHECK-AVAILABILITY HTTPException handler:", exc.status_code, exc.detail)
+        if exc.status_code in (401, 403):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "available": False,
+                    "availability_check_failed": True,
+                    "message": str(exc.detail),
+                    "error": str(exc.detail),
+                },
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "available": False,
+                "availability_check_failed": True,
+                "message": str(exc.detail),
+                "error": str(exc.detail),
+            },
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    traceback.print_exc()
+    if request.url.path == "/check-availability":
+        print("CHECK-AVAILABILITY unhandled exception:", repr(exc))
+        return JSONResponse(
+            status_code=200,
+            content={
+                "available": False,
+                "availability_check_failed": True,
+                "message": "Availability check temporarily unavailable",
+                "error": "internal_error",
+                "slots": [],
+            },
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 # ---------------- DB ---------------- #
@@ -665,6 +757,12 @@ def delete_booking_row_endpoint(
     return {"status": "deleted"}
 
 
+@app.options("/check-availability")
+def check_availability_preflight():
+    """Explicit OPTIONS so preflight never 404s before CORSMiddleware runs."""
+    return {}
+
+
 @app.post("/check-availability")
 def availability(
     req: AvailabilityCheckRequest,
@@ -672,7 +770,7 @@ def availability(
     db: Session = Depends(get_db),
 ):
     print(
-        "CHECK-AVAILABILITY incoming:",
+        "CHECK-AVAILABILITY POST received:",
         f"auth_client_id={client_id}",
         f"date={req.date!r}",
         f"time={req.time!r}",
@@ -681,11 +779,16 @@ def availability(
         client = db.query(Client).filter(Client.id == _parse_client_uuid(client_id)).first()
         if not client:
             print("CHECK-AVAILABILITY: client not found", f"auth_client_id={client_id}")
-            return {
-                "available": False,
-                "availability_check_failed": True,
-                "message": "Client not found",
-            }
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "available": False,
+                    "availability_check_failed": True,
+                    "message": "Client not found",
+                    "error": "client_not_found",
+                    "slots": [],
+                },
+            )
 
         cal_id = (client.calendar_id or "").strip() or None
         tz = (client.timezone or "America/New_York").strip() or "America/New_York"
@@ -697,7 +800,7 @@ def availability(
             f"blocked_dates={client.blocked_dates!r}",
         )
 
-        return check_availability_logic(
+        result = check_availability_logic(
             date=req.date,
             time=req.time,
             calendar_id=client.calendar_id,
@@ -707,22 +810,36 @@ def availability(
             blocked_dates=client.blocked_dates,
             working_hours=client.working_hours,
         )
+        print("CHECK-AVAILABILITY result:", result)
+        return JSONResponse(status_code=200, content=result)
     except HTTPException as he:
         if he.status_code in (401, 403):
             raise
         print("CHECK-AVAILABILITY HTTPException:", he.status_code, he.detail)
-        return {
-            "available": False,
-            "availability_check_failed": True,
-            "message": str(he.detail),
-        }
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "available": False,
+                "availability_check_failed": True,
+                "message": str(he.detail),
+                "error": str(he.detail),
+                "slots": [],
+            },
+        )
     except Exception as e:
         print("CHECK-AVAILABILITY unexpected:", repr(e))
-        return {
-            "available": False,
-            "availability_check_failed": True,
-            "message": "Availability check temporarily unavailable",
-        }
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "available": False,
+                "availability_check_failed": True,
+                "message": "Availability check temporarily unavailable",
+                "error": "calendar lookup failed",
+                "slots": [],
+            },
+        )
 
 
 @app.post("/book-appointment")
