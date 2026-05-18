@@ -15,8 +15,8 @@ import os
 import re
 from typing import Optional
 
-_RESEND_TEST_DOMAIN = "resend.dev"
-_DEFAULT_FROM = "onboarding@resend.dev"
+_RESEND_TEST_DOMAIN = "wrixio.com"
+_DEFAULT_FROM = "noreply@wrixio.com"
 _EMAIL_IN_FROM = re.compile(r"<([^>]+@[^>]+)>")
 _PLAIN_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
