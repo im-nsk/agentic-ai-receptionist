@@ -43,7 +43,13 @@ from backend.services.calendar_service import (
 )
 from backend.services.google_public import get_booking_service_account_email
 from backend.services.phone_validation import normalize_and_validate_phone
-from backend.services.email_service import send_email_otp, send_password_reset_email
+from backend.services.email_service import (
+    EmailConfigurationError,
+    EmailDeliveryError,
+    log_resend_startup_status,
+    send_email_otp,
+    send_password_reset_email,
+)
 from backend.services.sheet_analytics import compute_sheet_analytics, empty_analytics_payload
 from backend.services.sheets_service import (
     SheetAccessNotGrantedError,
@@ -118,6 +124,26 @@ if os.getenv("APP_ENV", "").lower() in ("production", "prod") and VAPI_API_KEY =
     )
 
 migrate_schema(engine)
+log_resend_startup_status()
+
+
+def _email_failure_http(exc: Exception) -> HTTPException:
+    if isinstance(exc, EmailConfigurationError):
+        print("[EMAIL] configuration error:", str(exc))
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "Email service is not configured for production. "
+                "Verify a domain at resend.com/domains and set RESEND_FROM to an address on that domain."
+            ),
+        )
+    if isinstance(exc, EmailDeliveryError):
+        print("[EMAIL] delivery error:", str(exc), f"recipient={exc.recipient}")
+        return HTTPException(
+            status_code=503,
+            detail=str(exc) or "Could not send email. Please try again in a few minutes.",
+        )
+    return HTTPException(status_code=503, detail="Could not send email. Please try again.")
 
 
 class PublicConfigResponse(BaseModel):
@@ -380,7 +406,10 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
             existing.password_reset_otp = None
             existing.password_reset_otp_expiry = None
             db.commit()
-            send_email_otp(email, code)
+            try:
+                send_email_otp(email, code)
+            except (EmailConfigurationError, EmailDeliveryError) as mail_exc:
+                raise _email_failure_http(mail_exc) from mail_exc
             return {"status": "pending_verification", "email": email}
 
         client = Client(
@@ -393,9 +422,14 @@ def signup(data: SignupRequest, db: Session = Depends(get_db)):
         )
         db.add(client)
         db.commit()
-        send_email_otp(email, code)
+        try:
+            send_email_otp(email, code)
+        except (EmailConfigurationError, EmailDeliveryError) as mail_exc:
+            raise _email_failure_http(mail_exc) from mail_exc
         return {"status": "pending_verification", "email": email}
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print("SIGNUP ERROR:", repr(e))
@@ -441,7 +475,10 @@ def resend_otp(data: EmailOnlyRequest, db: Session = Depends(get_db)):
     client.otp_code = code
     client.otp_expiry = expires_at
     db.commit()
-    send_email_otp(data.email, code)
+    try:
+        send_email_otp(data.email, code)
+    except (EmailConfigurationError, EmailDeliveryError) as mail_exc:
+        raise _email_failure_http(mail_exc) from mail_exc
     return {"status": "sent"}
 
 
@@ -455,7 +492,10 @@ def forgot_password(data: EmailOnlyRequest, db: Session = Depends(get_db)):
         client.password_reset_otp = code
         client.password_reset_otp_expiry = expires_at
         db.commit()
-        send_password_reset_email(data.email, code)
+        try:
+            send_password_reset_email(data.email, code)
+        except (EmailConfigurationError, EmailDeliveryError) as mail_exc:
+            raise _email_failure_http(mail_exc) from mail_exc
     return {"status": "ok"}
 
 
