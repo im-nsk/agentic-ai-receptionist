@@ -11,9 +11,9 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -43,6 +43,11 @@ from backend.services.calendar_service import (
 )
 from backend.services.google_public import get_booking_service_account_email
 from backend.services.phone_validation import normalize_and_validate_phone
+from backend.services.tenant_resolver import (
+    assign_twilio_number_to_client,
+    resolve_client_by_inbound_number,
+)
+from backend.services.twilio_voice import twiml_no_tenant_configured, twiml_tenant_greeting
 from backend.services.email_service import (
     EmailConfigurationError,
     EmailDeliveryError,
@@ -250,11 +255,27 @@ def _client_slot_minutes(client: Client) -> int:
     return int(v) if v > 0 else 30
 
 
-def get_client_by_phone(db: Session, to_number: Optional[str]):
-    """Multi-tenant lookup: inbound AI / Twilio / VAPI `to_number` must match stored `phone_number`."""
-    if not to_number or not str(to_number).strip():
+def get_client_by_phone(db: Session, to_number: Optional[str]) -> Optional[Client]:
+    """Resolve tenant by inbound Twilio/VAPI ``To`` (twilio_number, then legacy phone_number)."""
+    ctx = resolve_client_by_inbound_number(db, to_number, log_prefix="INBOUND")
+    if not ctx:
         return None
-    return db.query(Client).filter(Client.phone_number == str(to_number).strip()).first()
+    return db.query(Client).filter(Client.id == ctx.client_id).first()
+
+
+def verify_twilio_admin(x_admin_secret: Optional[str] = Header(None, alias="x-admin-secret")):
+    """Protect temporary admin routes for Twilio number assignment."""
+    expected = os.getenv("TWILIO_ADMIN_SECRET", "").strip()
+    if not expected or x_admin_secret != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+class AssignTwilioNumberRequest(BaseModel):
+    client_id: uuid.UUID
+    twilio_number: Optional[str] = Field(
+        None,
+        description="E.164 number; defaults to TWILIO_PHONE env when omitted",
+    )
 
 
 def _generate_otp_code() -> str:
@@ -557,6 +578,7 @@ def get_client_data(
         "sheet_id": client.sheet_id or "",
         "timezone": client.timezone or "America/New_York",
         "phone_number": client.phone_number or "",
+        "twilio_number": client.twilio_number or "",
         "client_phone": client.client_phone or "",
         "setup_complete": setup_ready,
         "business_name": client.business_name or "",
@@ -978,7 +1000,105 @@ def _vapi_str(payload: Dict[str, Any], key: str, label: Optional[str] = None) ->
     return str(raw).strip()
 
 
-# ---------------- VAPI (x-api-key + to_number) ---------------- #
+# ---------------- Twilio admin (assign one number → one client) ---------------- #
+@app.get("/admin/twilio/status")
+def admin_twilio_status(
+    db: Session = Depends(get_db),
+    _admin: None = Depends(verify_twilio_admin),
+):
+    """Which client owns the inbound Twilio number (testing / single-number mode)."""
+    env_number = (os.getenv("TWILIO_PHONE") or "").strip()
+    assigned = (
+        db.query(Client)
+        .filter(Client.twilio_number.isnot(None), Client.twilio_number != "")
+        .all()
+    )
+    return {
+        "twilio_phone_env": env_number or None,
+        "assigned_count": len(assigned),
+        "assignments": [
+            {
+                "client_id": str(c.id),
+                "email": c.email,
+                "business_name": c.business_name or c.name,
+                "twilio_number": c.twilio_number,
+            }
+            for c in assigned
+        ],
+    }
+
+
+@app.post("/admin/twilio/assign")
+def admin_assign_twilio_number(
+    body: AssignTwilioNumberRequest,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(verify_twilio_admin),
+):
+    """
+    Manually assign your single Twilio number to one client.
+    Clears the same number from any other client first.
+    """
+    number = (body.twilio_number or os.getenv("TWILIO_PHONE") or "").strip()
+    if not number:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide twilio_number or set TWILIO_PHONE in the server environment.",
+        )
+    try:
+        client = assign_twilio_number_to_client(
+            db,
+            client_id=body.client_id,
+            twilio_number=number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "status": "assigned",
+        "client_id": str(client.id),
+        "email": client.email,
+        "business_name": client.business_name or client.name,
+        "twilio_number": client.twilio_number,
+    }
+
+
+# ---------------- Twilio voice webhook (To → tenant) ---------------- #
+@app.api_route("/twilio/voice/incoming", methods=["GET", "POST"])
+async def twilio_voice_incoming(
+    request: Request,
+    db: Session = Depends(get_db),
+    To: str = Form(default=""),
+    From: str = Form(default=""),
+    CallSid: str = Form(default=""),
+):
+    """Inbound call: resolve tenant from Twilio ``To``, return TwiML."""
+    if not To and request.method == "POST":
+        try:
+            form = await request.form()
+            To = str(form.get("To") or "")
+            From = str(form.get("From") or "")
+            CallSid = str(form.get("CallSid") or CallSid)
+        except Exception:
+            pass
+
+    print(
+        "TWILIO_VOICE incoming:",
+        f"method={request.method}",
+        f"To={To!r}",
+        f"From={From!r}",
+        f"CallSid={CallSid!r}",
+    )
+
+    tenant = resolve_client_by_inbound_number(db, To, log_prefix="TWILIO_VOICE")
+    if not tenant:
+        xml = twiml_no_tenant_configured(To)
+        return Response(content=xml, media_type="application/xml")
+
+    xml = twiml_tenant_greeting(tenant, From)
+    return Response(content=xml, media_type="application/xml")
+
+
+# ---------------- VAPI (x-api-key + to_number → tenant) ---------------- #
 @app.post("/vapi/check-availability")
 def vapi_check(
     payload: Dict[str, Any],
@@ -987,11 +1107,10 @@ def vapi_check(
 ):
     to_number_raw = payload.get("to_number")
     to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
-    client = get_client_by_phone(db, to_number)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    calendar_id = client.calendar_id
-    timezone = client.timezone or "America/New_York"
+    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI")
+    if not tenant:
+        print("VAPI check-availability: no tenant", f"to_number={to_number!r}")
+        raise HTTPException(status_code=404, detail="Client not found for this phone number")
 
     date = _vapi_str(payload, "date")
     time = _vapi_str(payload, "time")
@@ -999,12 +1118,12 @@ def vapi_check(
     return check_availability_logic(
         date=date,
         time=time,
-        calendar_id=calendar_id,
-        timezone_str=timezone,
-        duration_minutes=_client_slot_minutes(client),
-        weekly_availability=client.weekly_availability,
-        blocked_dates=client.blocked_dates,
-        working_hours=client.working_hours,
+        calendar_id=tenant.calendar_id,
+        timezone_str=tenant.timezone,
+        duration_minutes=tenant.slot_duration,
+        weekly_availability=tenant.weekly_availability,
+        blocked_dates=tenant.blocked_dates,
+        working_hours=tenant.working_hours,
     )
 
 
@@ -1015,16 +1134,14 @@ def vapi_book(
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_vapi),
 ):
-    try:
-        to_number_raw = payload.get("to_number")
-        to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
-        client = get_client_by_phone(db, to_number)
-        if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
-        calendar_id = client.calendar_id
-        sheet_id = client.sheet_id
-        timezone = client.timezone or "America/New_York"
+    to_number_raw = payload.get("to_number")
+    to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
+    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI")
+    if not tenant:
+        print("VAPI book: no tenant", f"to_number={to_number!r}")
+        raise HTTPException(status_code=404, detail="Client not found for this phone number")
 
+    try:
         name = _vapi_str(payload, "name")
         phone = _vapi_str(payload, "phone")
         date = _vapi_str(payload, "date")
@@ -1032,28 +1149,46 @@ def vapi_book(
         notes_raw = payload.get("notes")
         notes = str(notes_raw).strip()[:4000] if notes_raw is not None else ""
 
-        return book_appointment_logic(
-            client_id=client.id,
+        print(
+            "VAPI book start:",
+            tenant.log_fields(),
+            f"caller_phone={phone!r}",
+            f"date={date!r}",
+            f"time={time!r}",
+        )
+
+        result = book_appointment_logic(
+            client_id=tenant.client_id,
             name=name,
             phone=phone,
             date=date,
             time=time,
-            calendar_id=calendar_id,
-            sheet_id=sheet_id,
-            timezone_str=timezone,
-            duration_minutes=_client_slot_minutes(client),
+            calendar_id=tenant.calendar_id,
+            sheet_id=tenant.sheet_id,
+            timezone_str=tenant.timezone,
+            duration_minutes=tenant.slot_duration,
             background_tasks=background_tasks,
             db=db,
             source="vapi",
             notes=notes,
-            weekly_availability=client.weekly_availability,
-            blocked_dates=client.blocked_dates,
-            working_hours=client.working_hours,
-            business_name=client.business_name,
+            weekly_availability=tenant.weekly_availability,
+            blocked_dates=tenant.blocked_dates,
+            working_hours=tenant.working_hours,
+            business_name=tenant.business_name,
         )
 
+        ok = result.get("status") == "confirmed"
+        print(
+            "VAPI book",
+            "SUCCESS" if ok else "FAILURE",
+            tenant.log_fields(),
+            f"result={result!r}",
+        )
+        return result
+
     except HTTPException:
+        print("VAPI book FAILURE:", tenant.log_fields(), "http_error")
         raise
     except Exception as e:
-        print("VAPI Booking Error:", repr(e))
-        raise HTTPException(status_code=500, detail="Booking failed")
+        print("VAPI book FAILURE:", tenant.log_fields(), repr(e))
+        raise HTTPException(status_code=500, detail="Booking failed") from e
