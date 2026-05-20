@@ -15,7 +15,10 @@ class Client(Base):
     email = Column(String, unique=True, nullable=False)
     password = Column(String, nullable=False)
 
+    # Legacy inbound line; prefer twilio_number for Twilio/VAPI routing.
     phone_number = Column(String, unique=True, index=True)
+    # E.164 Twilio number assigned to this tenant (one number → one client).
+    twilio_number = Column(String, unique=True, index=True, nullable=True)
     client_phone = Column(String)
 
     calendar_id = Column(String)
