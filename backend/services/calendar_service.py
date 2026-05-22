@@ -651,8 +651,16 @@ def create_event(
             calendarId=calendar_id,
             body=event
         ).execute()
+        if source == "vapi":
+            print(
+                "[VOICE CALENDAR CREATED]",
+                f"calendar_id={calendar_id!r}",
+                f"start={start_time.isoformat()!r}",
+            )
 
         booking_id = generate_human_booking_id(business_name)
+        if source == "vapi":
+            print("[VOICE SHEET WRITE]", f"sheet_id={sheet_id!r}", f"booking_id={booking_id!r}")
         save_to_sheet(
             booking_id=booking_id,
             name=name,
