@@ -190,6 +190,14 @@ def book_appointment_logic(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     duration_minutes = duration_minutes if duration_minutes > 0 else 30
+    if source == "vapi":
+        print(
+            "[VOICE BOOKING API]",
+            "calling create_event (calendar + sheet)",
+            f"client_id={client_id}",
+            f"date={date!r}",
+            f"time={time!r}",
+        )
     ok = create_event(
         name,
         phone,

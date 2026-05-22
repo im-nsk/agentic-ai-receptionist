@@ -1,0 +1,216 @@
+"""Voice (VAPI) booking — same backend path as web, with explicit trace logs."""
+
+from __future__ import annotations
+
+import json
+import traceback
+import uuid
+from typing import Any, Optional
+
+from fastapi import BackgroundTasks, HTTPException
+from sqlalchemy.orm import Session
+
+from backend.services.booking_service import book_appointment_logic, check_availability_logic
+from backend.services.tenant_resolver import TenantContext
+
+
+def _log_voice_booking_started(tenant: TenantContext, *, tool_name: str, args: dict, call_id: str) -> None:
+    print(
+        "[VOICE BOOKING STARTED]",
+        f"tool={tool_name!r}",
+        f"call_id={call_id!r}",
+        tenant.log_fields(),
+        f"args={json.dumps(args, default=str)!r}",
+    )
+
+
+def _log_voice_booking_success(tenant: TenantContext, *, result: dict, call_id: str) -> None:
+    print(
+        "[VOICE BOOKING SUCCESS]",
+        f"call_id={call_id!r}",
+        tenant.log_fields(),
+        f"calendar_id={tenant.calendar_id!r}",
+        f"sheet_id={tenant.sheet_id!r}",
+        f"result={json.dumps(result, default=str)!r}",
+    )
+
+
+def _log_voice_booking_failed(
+    tenant: Optional[TenantContext],
+    *,
+    reason: str,
+    call_id: str = "",
+    exc: Optional[BaseException] = None,
+) -> None:
+    ctx = tenant.log_fields() if tenant else {}
+    print(
+        "[VOICE BOOKING FAILED]",
+        f"call_id={call_id!r}",
+        f"reason={reason!r}",
+        f"tenant={ctx!r}",
+    )
+    if exc:
+        traceback.print_exc()
+
+
+def execute_voice_check_availability(
+    db: Session,
+    tenant: TenantContext,
+    args: dict[str, Any],
+    *,
+    tool_name: str,
+    call_id: str,
+) -> dict:
+    """Same as web availability check, keyed by tenant from inbound Twilio number."""
+    date = str(args.get("date") or args.get("appointment_date") or "").strip()
+    time = str(args.get("time") or args.get("appointment_time") or "").strip()
+    if not date or not time:
+        _log_voice_booking_failed(
+            tenant,
+            reason="missing date or time for availability check",
+            call_id=call_id,
+        )
+        return {
+            "available": False,
+            "message": "date and time are required",
+        }
+
+    print(
+        "[VOICE AVAILABILITY CHECK]",
+        f"tool={tool_name!r}",
+        f"call_id={call_id!r}",
+        tenant.log_fields(),
+        f"date={date!r}",
+        f"time={time!r}",
+    )
+
+    try:
+        result = check_availability_logic(
+            date=date,
+            time=time,
+            calendar_id=tenant.calendar_id,
+            timezone_str=tenant.timezone,
+            duration_minutes=tenant.slot_duration,
+            weekly_availability=tenant.weekly_availability,
+            blocked_dates=tenant.blocked_dates,
+            working_hours=tenant.working_hours,
+        )
+        print(
+            "[VOICE AVAILABILITY RESULT]",
+            f"call_id={call_id!r}",
+            f"available={result.get('available')}",
+            f"message={result.get('message')!r}",
+        )
+        return result
+    except Exception as exc:
+        _log_voice_booking_failed(
+            tenant,
+            reason=f"availability check exception: {exc!r}",
+            call_id=call_id,
+            exc=exc,
+        )
+        return {
+            "available": False,
+            "message": "Availability check failed",
+            "error": str(exc),
+        }
+
+
+def execute_voice_book(
+    db: Session,
+    tenant: TenantContext,
+    args: dict[str, Any],
+    background_tasks: BackgroundTasks,
+    *,
+    tool_name: str,
+    call_id: str,
+    default_caller_phone: str = "",
+) -> dict:
+    """
+    Book using the same ``book_appointment_logic`` as POST /book (web).
+    """
+    _log_voice_booking_started(tenant, tool_name=tool_name, args=args, call_id=call_id)
+
+    name = str(args.get("name") or args.get("customer_name") or "Phone caller").strip()
+    phone = str(
+        args.get("phone")
+        or args.get("customer_phone")
+        or args.get("caller_phone")
+        or default_caller_phone
+        or ""
+    ).strip()
+    date = str(args.get("date") or args.get("appointment_date") or "").strip()
+    time = str(args.get("time") or args.get("appointment_time") or "").strip()
+    notes = str(args.get("notes") or args.get("note") or "")[:4000]
+
+    if not phone:
+        _log_voice_booking_failed(
+            tenant,
+            reason="missing caller phone number",
+            call_id=call_id,
+        )
+        return {"status": "failed", "message": "Customer phone number is required"}
+    if not date or not time:
+        _log_voice_booking_failed(
+            tenant,
+            reason="missing date or time",
+            call_id=call_id,
+        )
+        return {"status": "failed", "message": "Appointment date and time are required"}
+
+    if not tenant.calendar_id or not tenant.sheet_id:
+        _log_voice_booking_failed(
+            tenant,
+            reason="tenant setup incomplete (calendar_id or sheet_id missing)",
+            call_id=call_id,
+        )
+        return {
+            "status": "failed",
+            "message": "Business booking is not fully configured yet",
+        }
+
+    try:
+        result = book_appointment_logic(
+            client_id=tenant.client_id,
+            name=name,
+            phone=phone,
+            date=date,
+            time=time,
+            calendar_id=tenant.calendar_id,
+            sheet_id=tenant.sheet_id,
+            timezone_str=tenant.timezone,
+            duration_minutes=tenant.slot_duration,
+            background_tasks=background_tasks,
+            db=db,
+            source="vapi",
+            notes=notes,
+            weekly_availability=tenant.weekly_availability,
+            blocked_dates=tenant.blocked_dates,
+            working_hours=tenant.working_hours,
+            business_name=tenant.business_name,
+        )
+        if result.get("status") == "confirmed":
+            _log_voice_booking_success(tenant, result=result, call_id=call_id)
+        else:
+            _log_voice_booking_failed(
+                tenant,
+                reason=result.get("message") or "create_event returned false",
+                call_id=call_id,
+            )
+        return result
+    except HTTPException as exc:
+        _log_voice_booking_failed(
+            tenant,
+            reason=f"HTTP {exc.status_code}: {exc.detail}",
+            call_id=call_id,
+            exc=exc,
+        )
+        return {"status": "failed", "message": str(exc.detail)}
+    except Exception as exc:
+        _log_voice_booking_failed(
+            tenant,
+            reason=f"unexpected: {exc!r}",
+            call_id=call_id,
+            exc=exc,
+        )
+        return {"status": "failed", "message": "Booking failed", "error": str(exc)}

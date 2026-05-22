@@ -48,6 +48,7 @@ from backend.services.tenant_resolver import (
     resolve_client_by_inbound_number,
 )
 from backend.services.twilio_voice import twiml_no_tenant_configured, twiml_tenant_greeting
+from backend.services.vapi_webhook import dispatch_vapi_request
 from backend.services.email_service import (
     EmailConfigurationError,
     EmailDeliveryError,
@@ -130,6 +131,18 @@ if os.getenv("APP_ENV", "").lower() in ("production", "prod") and VAPI_API_KEY =
 
 migrate_schema(engine)
 log_resend_startup_status()
+
+_api_public = (
+    os.getenv("PUBLIC_API_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or "http://127.0.0.1:8000"
+).rstrip("/")
+print(
+    "[VAPI STARTUP]",
+    f"voice_booking_webhook={_api_public}/vapi/webhook",
+    "header=x-api-key",
+    "tools=book_appointment|check_availability (see vapi_webhook.py aliases)",
+)
 
 
 def _email_failure_http(exc: Exception) -> HTTPException:
@@ -1082,11 +1095,16 @@ async def twilio_voice_incoming(
             pass
 
     print(
-        "TWILIO_VOICE incoming:",
+        "[TWILIO WEBHOOK INCOMING]",
         f"method={request.method}",
         f"To={To!r}",
         f"From={From!r}",
         f"CallSid={CallSid!r}",
+    )
+    print(
+        "[TWILIO WEBHOOK NOTE]",
+        "Voice AI + booking run via VAPI server URL (/vapi/webhook) when Twilio is linked to VAPI.",
+        "This route only plays a greeting unless you Connect to another URL.",
     )
 
     tenant = resolve_client_by_inbound_number(db, To, log_prefix="TWILIO_VOICE")
@@ -1098,33 +1116,39 @@ async def twilio_voice_incoming(
     return Response(content=xml, media_type="application/xml")
 
 
-# ---------------- VAPI (x-api-key + to_number → tenant) ---------------- #
-@app.post("/vapi/check-availability")
-def vapi_check(
+# ---------------- VAPI (server URL tool-calls + legacy flat tool URLs) ---------------- #
+@app.post("/vapi/webhook")
+@app.post("/vapi/server")
+def vapi_server_webhook(
     payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_vapi),
 ):
-    to_number_raw = payload.get("to_number")
-    to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
-    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI")
-    if not tenant:
-        print("VAPI check-availability: no tenant", f"to_number={to_number!r}")
-        raise HTTPException(status_code=404, detail="Client not found for this phone number")
+    """
+    Primary VAPI Server URL — handles ``tool-calls`` (book / check availability).
+    Configure in VAPI dashboard: https://YOUR_API/vapi/webhook
+    Header: x-api-key: VAPI_API_KEY
+    """
+    try:
+        return dispatch_vapi_request(payload, db, background_tasks)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print("[VAPI WEBHOOK ERROR]", repr(exc))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="VAPI webhook failed") from exc
 
-    date = _vapi_str(payload, "date")
-    time = _vapi_str(payload, "time")
 
-    return check_availability_logic(
-        date=date,
-        time=time,
-        calendar_id=tenant.calendar_id,
-        timezone_str=tenant.timezone,
-        duration_minutes=tenant.slot_duration,
-        weekly_availability=tenant.weekly_availability,
-        blocked_dates=tenant.blocked_dates,
-        working_hours=tenant.working_hours,
-    )
+@app.post("/vapi/check-availability")
+def vapi_check(
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_vapi),
+):
+    """Legacy per-tool URL; also accepts VAPI tool-calls envelope."""
+    return dispatch_vapi_request(payload, db, background_tasks)
 
 
 @app.post("/vapi/book")
@@ -1134,61 +1158,5 @@ def vapi_book(
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_vapi),
 ):
-    to_number_raw = payload.get("to_number")
-    to_number = str(to_number_raw).strip() if to_number_raw is not None else ""
-    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI")
-    if not tenant:
-        print("VAPI book: no tenant", f"to_number={to_number!r}")
-        raise HTTPException(status_code=404, detail="Client not found for this phone number")
-
-    try:
-        name = _vapi_str(payload, "name")
-        phone = _vapi_str(payload, "phone")
-        date = _vapi_str(payload, "date")
-        time = _vapi_str(payload, "time")
-        notes_raw = payload.get("notes")
-        notes = str(notes_raw).strip()[:4000] if notes_raw is not None else ""
-
-        print(
-            "VAPI book start:",
-            tenant.log_fields(),
-            f"caller_phone={phone!r}",
-            f"date={date!r}",
-            f"time={time!r}",
-        )
-
-        result = book_appointment_logic(
-            client_id=tenant.client_id,
-            name=name,
-            phone=phone,
-            date=date,
-            time=time,
-            calendar_id=tenant.calendar_id,
-            sheet_id=tenant.sheet_id,
-            timezone_str=tenant.timezone,
-            duration_minutes=tenant.slot_duration,
-            background_tasks=background_tasks,
-            db=db,
-            source="vapi",
-            notes=notes,
-            weekly_availability=tenant.weekly_availability,
-            blocked_dates=tenant.blocked_dates,
-            working_hours=tenant.working_hours,
-            business_name=tenant.business_name,
-        )
-
-        ok = result.get("status") == "confirmed"
-        print(
-            "VAPI book",
-            "SUCCESS" if ok else "FAILURE",
-            tenant.log_fields(),
-            f"result={result!r}",
-        )
-        return result
-
-    except HTTPException:
-        print("VAPI book FAILURE:", tenant.log_fields(), "http_error")
-        raise
-    except Exception as e:
-        print("VAPI book FAILURE:", tenant.log_fields(), repr(e))
-        raise HTTPException(status_code=500, detail="Booking failed") from e
+    """Legacy per-tool URL; also accepts VAPI tool-calls envelope."""
+    return dispatch_vapi_request(payload, db, background_tasks)
