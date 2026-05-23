@@ -24,6 +24,7 @@ from backend.services.voice_booking import (
 )
 
 # Tool names configured in VAPI dashboard (aliases supported).
+# VAPI tool param descriptions: voice_datetime.VAPI_TOOL_DATE_PARAM_HINT / TIME.
 CHECK_AVAILABILITY_TOOLS = frozenset(
     {
         "check_availability",
