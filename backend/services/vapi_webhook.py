@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Tuple
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
+from backend.services.vapi_assistant import (
+    build_assistant_request_fallback,
+    build_assistant_request_response,
+)
 from backend.services.vapi_payload import (
     extract_caller_from_candidates,
     is_flat_tool_args_with_call_context,
@@ -49,6 +53,27 @@ BOOK_APPOINTMENT_TOOLS = frozenset(
 
 def _normalize_tool_name(name: str) -> str:
     return (name or "").strip().lower().replace(" ", "_")
+
+
+def is_assistant_request(body: dict) -> bool:
+    _, message = normalize_vapi_body(body)
+    return message.get("type") == "assistant-request"
+
+
+def handle_assistant_request(body: dict, db: Session) -> dict:
+    """
+    VAPI calls server URL before the call starts (phone number has no fixed assistantId).
+    Return dynamic assistant config for the resolved tenant.
+    """
+    _body, message = normalize_vapi_body(body)
+    print("[VAPI ROUTE]", "protocol=assistant-request (dynamic tenant assistant)")
+
+    resolution = resolve_tenant_from_vapi_payload(db, body, message, {}, log_prefix="VAPI_ASSISTANT")
+    if not resolution.tenant:
+        return build_assistant_request_fallback(
+            reason="tenant_not_resolved",
+        )
+    return build_assistant_request_response(resolution.tenant)
 
 
 def log_vapi_incoming(body: dict) -> None:
@@ -372,6 +397,9 @@ def dispatch_vapi_request(
     background_tasks: BackgroundTasks,
 ) -> dict:
     log_vapi_incoming(body)
+
+    if is_assistant_request(body):
+        return handle_assistant_request(body, db)
 
     if is_vapi_tool_calls_envelope(body):
         print("[VAPI ROUTE]", "protocol=tool-calls (VAPI server URL envelope)")

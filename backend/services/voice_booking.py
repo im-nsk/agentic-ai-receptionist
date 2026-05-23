@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
 from backend.services.tenant_resolver import TenantContext
+from backend.services.vapi_tool_response import (
+    enrich_voice_availability_response,
+    enrich_voice_book_response,
+)
 from backend.services.voice_datetime import VoiceDatetimeParseError, prepare_voice_booking_fields
 
 
@@ -128,6 +132,12 @@ def execute_voice_check_availability(
             blocked_dates=tenant.blocked_dates,
             working_hours=tenant.working_hours,
         )
+        result = enrich_voice_availability_response(
+            tenant,
+            result,
+            date_iso=date,
+            time_label=time,
+        )
         print(
             "[VOICE AVAILABILITY RESULT]",
             f"call_id={call_id!r}",
@@ -230,6 +240,7 @@ def execute_voice_book(
             working_hours=tenant.working_hours,
             business_name=tenant.business_name,
         )
+        result = enrich_voice_book_response(result, tenant)
         if result.get("status") == "confirmed":
             _log_voice_booking_success(tenant, result=result, call_id=call_id)
         else:
