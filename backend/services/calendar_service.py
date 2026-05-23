@@ -122,6 +122,13 @@ def parse_datetime(date, time, timezone):
         raise ValueError(f"Invalid date/time input: {date} {time}")
 
 
+def canonical_date_str_from_booking_dt(booking_dt: datetime, timezone: str) -> str:
+    """YYYY-MM-DD in tenant timezone (for rules that require ISO dates)."""
+    tz = ZoneInfo((timezone or "").strip() or "America/New_York")
+    local = booking_dt.astimezone(tz) if booking_dt.tzinfo else booking_dt.replace(tzinfo=tz)
+    return local.strftime("%Y-%m-%d")
+
+
 # ---------------- VALIDATIONS ---------------- #
 
 def is_within_booking_window(dt, open_mins: int, close_mins: int) -> bool:
@@ -235,9 +242,10 @@ def tenant_schedule_allows(
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
     if start_time <= datetime.now(ZoneInfo("UTC")):
         return False
+    date_str = canonical_date_str_from_booking_dt(booking_dt, timezone)
     return _tenant_rules_ok(
         booking_dt,
-        str(date).strip(),
+        date_str,
         duration_minutes,
         weekly_availability,
         blocked_dates,
@@ -279,7 +287,7 @@ def check_availability(
         )
         return _availability_payload(False, message="Invalid date or time.")
 
-    date_str = str(date).strip()
+    date_str = canonical_date_str_from_booking_dt(booking_dt, timezone)
     start_time = booking_dt.astimezone(ZoneInfo("UTC"))
     end_time = start_time + timedelta(minutes=duration_minutes)
 

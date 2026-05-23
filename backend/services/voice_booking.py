@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.services.booking_service import book_appointment_logic, check_availability_logic
 from backend.services.tenant_resolver import TenantContext
+from backend.services.voice_datetime import VoiceDatetimeParseError, prepare_voice_booking_fields
 
 
 def _log_voice_booking_started(tenant: TenantContext, *, tool_name: str, args: dict, call_id: str) -> None:
@@ -53,6 +54,28 @@ def _log_voice_booking_failed(
         traceback.print_exc()
 
 
+def _voice_datetime_failure(
+    tenant: TenantContext,
+    exc: VoiceDatetimeParseError,
+    *,
+    call_id: str,
+) -> dict:
+    _log_voice_booking_failed(
+        tenant,
+        reason=f"date/time parse: {exc.reason or exc!s}",
+        call_id=call_id,
+        exc=exc,
+    )
+    return {
+        "status": "failed",
+        "available": False,
+        "message": str(exc),
+        "error": exc.reason or "invalid_date_or_time",
+        "raw_date": exc.raw_date,
+        "raw_time": exc.raw_time,
+    }
+
+
 def execute_voice_check_availability(
     db: Session,
     tenant: TenantContext,
@@ -61,10 +84,10 @@ def execute_voice_check_availability(
     tool_name: str,
     call_id: str,
 ) -> dict:
-    """Same as web availability check, keyed by tenant from inbound Twilio number."""
-    date = str(args.get("date") or args.get("appointment_date") or "").strip()
-    time = str(args.get("time") or args.get("appointment_time") or "").strip()
-    if not date or not time:
+    """Same as web availability check, after normalizing VAPI date/time strings."""
+    raw_date = str(args.get("date") or args.get("appointment_date") or "").strip()
+    raw_time = str(args.get("time") or args.get("appointment_time") or "").strip()
+    if not raw_date or not raw_time:
         _log_voice_booking_failed(
             tenant,
             reason="missing date or time for availability check",
@@ -74,6 +97,16 @@ def execute_voice_check_availability(
             "available": False,
             "message": "date and time are required",
         }
+
+    try:
+        prepared = prepare_voice_booking_fields(args, tenant.timezone)
+    except VoiceDatetimeParseError as exc:
+        out = _voice_datetime_failure(tenant, exc, call_id=call_id)
+        out.pop("status", None)
+        return out
+
+    date = prepared["date"]
+    time = prepared["time"]
 
     print(
         "[VOICE AVAILABILITY CHECK]",
@@ -127,7 +160,7 @@ def execute_voice_book(
     default_caller_phone: str = "",
 ) -> dict:
     """
-    Book using the same ``book_appointment_logic`` as POST /book (web).
+    Book using the same ``book_appointment_logic`` as POST /book-appointment (web).
     """
     _log_voice_booking_started(tenant, tool_name=tool_name, args=args, call_id=call_id)
 
@@ -139,8 +172,8 @@ def execute_voice_book(
         or default_caller_phone
         or ""
     ).strip()
-    date = str(args.get("date") or args.get("appointment_date") or "").strip()
-    time = str(args.get("time") or args.get("appointment_time") or "").strip()
+    raw_date = str(args.get("date") or args.get("appointment_date") or "").strip()
+    raw_time = str(args.get("time") or args.get("appointment_time") or "").strip()
     notes = str(args.get("notes") or args.get("note") or "")[:4000]
 
     if not phone:
@@ -150,7 +183,7 @@ def execute_voice_book(
             call_id=call_id,
         )
         return {"status": "failed", "message": "Customer phone number is required"}
-    if not date or not time:
+    if not raw_date or not raw_time:
         _log_voice_booking_failed(
             tenant,
             reason="missing date or time",
@@ -168,6 +201,14 @@ def execute_voice_book(
             "status": "failed",
             "message": "Business booking is not fully configured yet",
         }
+
+    try:
+        prepared = prepare_voice_booking_fields(args, tenant.timezone)
+    except VoiceDatetimeParseError as exc:
+        return _voice_datetime_failure(tenant, exc, call_id=call_id)
+
+    date = prepared["date"]
+    time = prepared["time"]
 
     try:
         result = book_appointment_logic(
