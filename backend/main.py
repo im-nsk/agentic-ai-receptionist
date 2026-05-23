@@ -49,6 +49,7 @@ from backend.services.tenant_resolver import (
     resolve_client_by_inbound_number,
 )
 from backend.services.twilio_voice import twiml_no_tenant_configured, twiml_tenant_greeting
+from backend.services.vapi_tools_schema import vapi_setup_instructions
 from backend.services.vapi_webhook import dispatch_vapi_request
 from backend.services.email_service import (
     EmailConfigurationError,
@@ -140,9 +141,11 @@ _api_public = (
 ).rstrip("/")
 print(
     "[VAPI STARTUP]",
-    f"voice_booking_webhook={_api_public}/vapi/webhook",
+    f"server_url={_api_public}/vapi/webhook",
+    "events=assistant-request|tool-calls",
     "header=x-api-key",
-    "tools=book_appointment|check_availability (see vapi_webhook.py aliases)",
+    "base_assistant=VAPI_BASE_ASSISTANT_ID",
+    "tools=POST book_appointment|check_availability",
 )
 
 
@@ -1193,9 +1196,9 @@ def vapi_server_webhook(
     _auth: None = Depends(verify_vapi),
 ):
     """
-    Primary VAPI Server URL — handles ``tool-calls`` (book / check availability).
-    Configure in VAPI dashboard: https://YOUR_API/vapi/webhook
-    Header: x-api-key: VAPI_API_KEY
+    Primary VAPI Server URL — ``assistant-request`` (dynamic tenant) + ``tool-calls``.
+    Configure on VAPI phone number: server URL = https://YOUR_API/vapi/webhook (POST).
+    Header: x-api-key: VAPI_API_KEY. Tools must use POST, not GET.
     """
     try:
         return dispatch_vapi_request(payload, db, background_tasks)
@@ -1207,23 +1210,43 @@ def vapi_server_webhook(
         raise HTTPException(status_code=500, detail="VAPI webhook failed") from exc
 
 
-@app.post("/vapi/check-availability")
-def vapi_check(
-    payload: Dict[str, Any],
+@app.get("/vapi/tools/schema")
+def vapi_tools_schema():
+    """Tool + phone-number setup reference (no secrets)."""
+    return vapi_setup_instructions()
+
+
+@app.api_route("/vapi/check-availability", methods=["GET", "POST"])
+async def vapi_check(
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_vapi),
 ):
-    """Legacy per-tool URL; also accepts VAPI tool-calls envelope."""
+    """Per-tool URL (prefer single server URL). POST only for tool-calls."""
+    if request.method == "GET":
+        return {
+            "error": "Use POST",
+            "hint": "Configure this tool with method POST, or use server URL /vapi/webhook only.",
+            "schema": "/vapi/tools/schema",
+        }
+    payload = await request.json()
     return dispatch_vapi_request(payload, db, background_tasks)
 
 
-@app.post("/vapi/book")
-def vapi_book(
-    payload: Dict[str, Any],
+@app.api_route("/vapi/book", methods=["GET", "POST"])
+async def vapi_book(
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_vapi),
 ):
-    """Legacy per-tool URL; also accepts VAPI tool-calls envelope."""
+    """Per-tool URL (prefer single server URL). POST only for tool-calls."""
+    if request.method == "GET":
+        return {
+            "error": "Use POST",
+            "hint": "Configure this tool with method POST, or use server URL /vapi/webhook only.",
+            "schema": "/vapi/tools/schema",
+        }
+    payload = await request.json()
     return dispatch_vapi_request(payload, db, background_tasks)
