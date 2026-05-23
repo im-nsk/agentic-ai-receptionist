@@ -19,6 +19,9 @@ class Client(Base):
     phone_number = Column(String, unique=True, index=True)
     # E.164 Twilio number assigned to this tenant (one number → one client).
     twilio_number = Column(String, unique=True, index=True, nullable=True)
+    # VAPI dashboard IDs for tenant fallback when inbound E.164 is missing from webhook.
+    vapi_assistant_id = Column(String, unique=True, index=True, nullable=True)
+    vapi_phone_number_id = Column(String, unique=True, index=True, nullable=True)
     client_phone = Column(String)
 
     calendar_id = Column(String)

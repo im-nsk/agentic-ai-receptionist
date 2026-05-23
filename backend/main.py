@@ -4,6 +4,7 @@ FastAPI app — auth (OTP), client setup, booking (web + VAPI).
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import traceback
@@ -288,6 +289,18 @@ class AssignTwilioNumberRequest(BaseModel):
     twilio_number: Optional[str] = Field(
         None,
         description="E.164 number; defaults to TWILIO_PHONE env when omitted",
+    )
+
+
+class AssignVapiIdsRequest(BaseModel):
+    client_id: uuid.UUID
+    vapi_assistant_id: Optional[str] = Field(
+        None,
+        description="VAPI assistant UUID from dashboard (fallback when To missing in webhook)",
+    )
+    vapi_phone_number_id: Optional[str] = Field(
+        None,
+        description="VAPI phone-number UUID from dashboard (fallback tenant routing)",
     )
 
 
@@ -1075,6 +1088,51 @@ def admin_assign_twilio_number(
     }
 
 
+@app.post("/admin/vapi/assign")
+def admin_assign_vapi_ids(
+    body: AssignVapiIdsRequest,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(verify_twilio_admin),
+):
+    """Map VAPI assistant / phone-number IDs to a client for webhook tenant fallback."""
+    client = db.query(Client).filter(Client.id == body.client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if body.vapi_assistant_id:
+        other = (
+            db.query(Client)
+            .filter(
+                Client.vapi_assistant_id == body.vapi_assistant_id.strip(),
+                Client.id != client.id,
+            )
+            .first()
+        )
+        if other:
+            other.vapi_assistant_id = None
+        client.vapi_assistant_id = body.vapi_assistant_id.strip()
+    if body.vapi_phone_number_id:
+        other = (
+            db.query(Client)
+            .filter(
+                Client.vapi_phone_number_id == body.vapi_phone_number_id.strip(),
+                Client.id != client.id,
+            )
+            .first()
+        )
+        if other:
+            other.vapi_phone_number_id = None
+        client.vapi_phone_number_id = body.vapi_phone_number_id.strip()
+    db.commit()
+    db.refresh(client)
+    return {
+        "status": "assigned",
+        "client_id": str(client.id),
+        "vapi_assistant_id": client.vapi_assistant_id,
+        "vapi_phone_number_id": client.vapi_phone_number_id,
+        "twilio_number": client.twilio_number,
+    }
+
+
 # ---------------- Twilio voice webhook (To → tenant) ---------------- #
 @app.api_route("/twilio/voice/incoming", methods=["GET", "POST"])
 async def twilio_voice_incoming(
@@ -1085,15 +1143,24 @@ async def twilio_voice_incoming(
     CallSid: str = Form(default=""),
 ):
     """Inbound call: resolve tenant from Twilio ``To``, return TwiML."""
-    if not To and request.method == "POST":
+    form_dict: Dict[str, Any] = {}
+    if request.method == "POST":
         try:
             form = await request.form()
-            To = str(form.get("To") or "")
-            From = str(form.get("From") or "")
-            CallSid = str(form.get("CallSid") or CallSid)
+            form_dict = {k: str(form.get(k) or "") for k in form.keys()}
+            if not To:
+                To = form_dict.get("To", "")
+            if not From:
+                From = form_dict.get("From", "")
+            if not CallSid:
+                CallSid = form_dict.get("CallSid", CallSid)
         except Exception:
             pass
 
+    print(
+        "[TWILIO RAW PAYLOAD]",
+        json.dumps(form_dict or {"To": To, "From": From, "CallSid": CallSid}, default=str),
+    )
     print(
         "[TWILIO WEBHOOK INCOMING]",
         f"method={request.method}",

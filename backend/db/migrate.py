@@ -23,6 +23,10 @@ def migrate_schema(engine: Engine) -> None:
         additions.append(("phone_number", "VARCHAR"))
     if "twilio_number" not in existing:
         additions.append(("twilio_number", "VARCHAR"))
+    if "vapi_assistant_id" not in existing:
+        additions.append(("vapi_assistant_id", "VARCHAR"))
+    if "vapi_phone_number_id" not in existing:
+        additions.append(("vapi_phone_number_id", "VARCHAR"))
     if "client_phone" not in existing:
         additions.append(("client_phone", "VARCHAR"))
     if "business_name" not in existing:

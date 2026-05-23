@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import json
-import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
-from backend.services.tenant_resolver import TenantContext, resolve_client_by_inbound_number
+from backend.services.vapi_payload import (
+    extract_caller_from_candidates,
+    is_flat_tool_args_with_call_context,
+    is_manual_flat_test_payload,
+    is_vapi_tool_calls_envelope,
+    log_vapi_raw_payload,
+    normalize_vapi_body,
+    resolve_tenant_from_vapi_payload,
+    split_root_flat_tool_body,
+)
 from backend.services.voice_booking import (
     execute_voice_book,
     execute_voice_check_availability,
@@ -42,31 +50,23 @@ def _normalize_tool_name(name: str) -> str:
     return (name or "").strip().lower().replace(" ", "_")
 
 
-def is_vapi_tool_calls_payload(body: dict) -> bool:
-    msg = body.get("message")
-    return isinstance(msg, dict) and msg.get("type") == "tool-calls"
-
-
-def is_legacy_flat_booking_payload(body: dict) -> bool:
-    """Direct POST /vapi/book style (flat JSON) for manual testing."""
-    if "message" in body:
-        return False
-    return any(k in body for k in ("to_number", "date", "time", "name", "phone"))
-
-
 def log_vapi_incoming(body: dict) -> None:
-    msg = body.get("message") if isinstance(body.get("message"), dict) else {}
-    msg_type = msg.get("type") or ("legacy-flat" if is_legacy_flat_booking_payload(body) else "unknown")
-    call = msg.get("call") if isinstance(msg.get("call"), dict) else {}
+    log_vapi_raw_payload(body)
+    _body, message = normalize_vapi_body(body)
+    msg_type = message.get("type") or (
+        "legacy-flat" if is_manual_flat_test_payload(body) else "unknown"
+    )
+    call = message.get("call") if isinstance(message.get("call"), dict) else {}
     call_id = str(call.get("id") or "")
     print(
         "[VAPI WEBHOOK INCOMING]",
         f"message_type={msg_type!r}",
         f"call_id={call_id!r}",
+        f"top_level_keys={list(body.keys()) if isinstance(body, dict) else []!r}",
     )
-    _log_transcript_snippet(msg)
-    if msg_type == "tool-calls":
-        for tc in _iter_tool_calls(msg):
+    _log_transcript_snippet(message)
+    if msg_type == "tool-calls" or is_vapi_tool_calls_envelope(body):
+        for tc in _iter_tool_calls(message):
             print(
                 "[VAPI TOOL CALL DETECTED]",
                 f"tool={tc.get('name')!r}",
@@ -76,7 +76,6 @@ def log_vapi_incoming(body: dict) -> None:
 
 
 def _log_transcript_snippet(message: dict) -> None:
-    """Log recent user/assistant lines from artifact (STT / model output)."""
     artifact = message.get("artifact")
     if not isinstance(artifact, dict):
         return
@@ -107,7 +106,7 @@ def _log_transcript_snippet(message: dict) -> None:
 
 def _iter_tool_calls(message: dict) -> List[dict]:
     out: List[dict] = []
-    raw = message.get("toolCallList")
+    raw = message.get("toolCallList") or message.get("toolCalls")
     if isinstance(raw, list):
         out.extend([x for x in raw if isinstance(x, dict)])
     twtcl = message.get("toolWithToolCallList")
@@ -116,16 +115,16 @@ def _iter_tool_calls(message: dict) -> List[dict]:
             if not isinstance(entry, dict):
                 continue
             tc = entry.get("toolCall")
-            if isinstance(tc, dict) and tc not in out:
-                out.append(
-                    {
-                        "id": tc.get("id"),
-                        "name": entry.get("name") or (tc.get("function") or {}).get("name"),
-                        "arguments": (tc.get("function") or {}).get("parameters")
-                        or tc.get("parameters")
-                        or {},
-                    }
-                )
+            if isinstance(tc, dict):
+                built = {
+                    "id": tc.get("id"),
+                    "name": entry.get("name") or (tc.get("function") or {}).get("name"),
+                    "arguments": (tc.get("function") or {}).get("parameters")
+                    or tc.get("parameters")
+                    or {},
+                }
+                if built not in out:
+                    out.append(built)
     return out
 
 
@@ -139,72 +138,6 @@ def _tool_args(tool_call: dict) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def _extract_phone_from_call_obj(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, dict):
-        return str(value.get("number") or value.get("phoneNumber") or "").strip()
-    return ""
-
-
-def extract_inbound_to_number(message: dict, tool_args: dict) -> str:
-    """
-    Twilio/VAPI business line (maps to clients.twilio_number).
-    """
-    for key in ("to_number", "toNumber", "business_phone", "twilio_number"):
-        v = tool_args.get(key)
-        if v:
-            return str(v).strip()
-
-    # VAPI ServerMessageToolCalls.phoneNumber (assistant's inbound line)
-    pn = message.get("phoneNumber")
-    num = _extract_phone_from_call_obj(pn)
-    if num and "@" not in num:
-        return num
-
-    call = message.get("call") if isinstance(message.get("call"), dict) else {}
-    for path in (
-        call.get("phoneNumber"),
-        call.get("phoneNumberId"),  # sometimes only id — fallback below
-        message.get("phoneNumber"),
-    ):
-        num = _extract_phone_from_call_obj(path)
-        if num and "@" not in num:
-            return num
-
-    env_fallback = (os.getenv("TWILIO_PHONE") or "").strip()
-    return env_fallback
-
-
-def extract_caller_phone(message: dict, tool_args: dict) -> str:
-    for key in ("phone", "customer_phone", "caller_phone", "from_number", "fromNumber"):
-        v = tool_args.get(key)
-        if v:
-            return str(v).strip()
-
-    call = message.get("call") if isinstance(message.get("call"), dict) else {}
-    customer = call.get("customer") if isinstance(call.get("customer"), dict) else {}
-    return _extract_phone_from_call_obj(customer.get("number") or customer)
-
-
-def resolve_tenant_for_vapi_call(
-    db: Session,
-    message: dict,
-    tool_args: dict,
-) -> Optional[TenantContext]:
-    to_number = extract_inbound_to_number(message, tool_args)
-    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI")
-    if not tenant:
-        print(
-            "[VAPI TENANT MISS]",
-            f"to_number={to_number!r}",
-            "hint=assign TWILIO_PHONE to client via /admin/twilio/assign",
-        )
-    return tenant
-
-
 def _detect_intent(tool_name: str) -> str:
     norm = _normalize_tool_name(tool_name)
     if norm in {_normalize_tool_name(t) for t in BOOK_APPOINTMENT_TOOLS}:
@@ -214,14 +147,27 @@ def _detect_intent(tool_name: str) -> str:
     return f"unknown:{tool_name}"
 
 
+def _tenant_resolution_error(resolution: Any, tool_name: str) -> str:
+    if resolution.all_candidates:
+        return (
+            "Could not resolve business from call payload. "
+            f"Tried phone candidates={resolution.all_candidates!r}. "
+            "Assign clients.twilio_number or set vapi_assistant_id / VAPI_DEFAULT_CLIENT_ID."
+        )
+    return (
+        "No inbound business phone number in VAPI payload. "
+        "Assign twilio_number via /admin/twilio/assign or configure VAPI assistant/phone IDs."
+    )
+
+
 def _run_tool(
     db: Session,
-    tenant: TenantContext,
+    tenant: Any,
     tool_call: dict,
     background_tasks: BackgroundTasks,
     message: dict,
-) -> Tuple[str, Optional[str]]:
-    """Returns (toolCallId, result_json_string). error string if failed."""
+    body: dict,
+) -> Tuple[str, str]:
     tool_id = str(tool_call.get("id") or "")
     tool_name = str(tool_call.get("name") or "")
     args = _tool_args(tool_call)
@@ -236,10 +182,9 @@ def _run_tool(
         f"call_id={call_id!r}",
     )
     print(
-        "[VAPI BOOKING TRIGGER]",
+        "[VAPI BOOKING TOOL START]",
         f"intent={intent!r}",
         f"tool={tool_name!r}",
-        f"call_id={call_id!r}",
         tenant.log_fields(),
     )
 
@@ -254,7 +199,7 @@ def _run_tool(
         return tool_id, json.dumps(result, default=str)
 
     if intent == "book_appointment":
-        caller = extract_caller_phone(message, args)
+        caller = extract_caller_from_candidates(body, message, args)
         result = execute_voice_book(
             db,
             tenant,
@@ -276,12 +221,9 @@ def handle_vapi_tool_calls(
     db: Session,
     background_tasks: BackgroundTasks,
 ) -> dict:
-    """
-    VAPI-required response shape (HTTP 200):
-    { "results": [ { "toolCallId": "...", "result": "<json string>" } ] }
-    """
-    message = body.get("message") or {}
-    if not isinstance(message, dict):
+    _body, message = normalize_vapi_body(body)
+    if not message:
+        print("[VAPI WEBHOOK]", "tool-calls envelope missing message object")
         return {"results": []}
 
     results: List[dict] = []
@@ -290,20 +232,20 @@ def handle_vapi_tool_calls(
         tool_name = str(tool_call.get("name") or "")
         args = _tool_args(tool_call)
 
-        tenant = resolve_tenant_for_vapi_call(db, message, args)
+        resolution = resolve_tenant_from_vapi_payload(
+            db, body, message, args, log_prefix="VAPI"
+        )
+        tenant = resolution.tenant
         if not tenant:
-            err = "No business found for this phone number. Check twilio_number assignment."
+            err = _tenant_resolution_error(resolution, tool_name)
             print("[VOICE BOOKING FAILED]", f"reason={err}", f"tool={tool_name!r}")
-            results.append(
-                {
-                    "toolCallId": tool_id,
-                    "error": err,
-                }
-            )
+            results.append({"toolCallId": tool_id, "error": err})
             continue
 
         try:
-            tid, payload = _run_tool(db, tenant, tool_call, background_tasks, message)
+            tid, payload = _run_tool(
+                db, tenant, tool_call, background_tasks, message, body
+            )
             if not tid:
                 tid = tool_id
             results.append({"toolCallId": tid, "result": payload})
@@ -323,46 +265,103 @@ def handle_vapi_tool_calls(
     return {"results": results}
 
 
-def handle_legacy_flat_check(
-    body: dict,
-    db: Session,
-) -> dict:
-    """Backward-compatible flat JSON for /vapi/check-availability."""
-    to_number = str(body.get("to_number") or "").strip()
-    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI_LEGACY")
-    if not tenant:
-        return {"available": False, "message": "Client not found for this phone number"}
-
-    print("[VAPI LEGACY FLAT CHECK]", tenant.log_fields())
-    return execute_voice_check_availability(
-        db,
-        tenant,
-        body,
-        tool_name="legacy_flat_check",
-        call_id="legacy",
-    )
-
-
-def handle_legacy_flat_book(
+def handle_flat_tool_with_call_context(
     body: dict,
     db: Session,
     background_tasks: BackgroundTasks,
 ) -> dict:
-    """Backward-compatible flat JSON POST (manual / old VAPI custom URL per tool)."""
-    to_number = str(body.get("to_number") or "").strip()
-    tenant = resolve_client_by_inbound_number(db, to_number, log_prefix="VAPI_LEGACY")
+    """
+    Per-tool VAPI URL: ``{ name, date, time, phone, call, phoneNumber, ... }`` at root.
+    """
+    tool_args, pseudo_message = split_root_flat_tool_body(body)
+    resolution = resolve_tenant_from_vapi_payload(
+        db, body, pseudo_message, tool_args, log_prefix="VAPI_FLAT_CTX"
+    )
+    tenant = resolution.tenant
     if not tenant:
-        return {"status": "failed", "message": "Client not found for this phone number"}
+        err = _tenant_resolution_error(resolution, "flat+context")
+        print("[VOICE BOOKING FAILED]", f"reason={err}")
+        return {"status": "failed", "message": err}
 
-    print("[VAPI LEGACY FLAT BOOK]", tenant.log_fields(), f"body_keys={list(body.keys())}")
-    return execute_voice_book(
+    is_book = bool(tool_args.get("name") or tool_args.get("customer_name"))
+    print(
+        "[VAPI ROUTE]",
+        "protocol=flat-tool-args+call-context",
+        f"resolution={resolution.resolution_method!r}",
+        f"pseudo_message_keys={list(pseudo_message.keys())!r}",
+        tenant.log_fields(),
+    )
+
+    if is_book:
+        caller = extract_caller_from_candidates(body, pseudo_message, tool_args)
+        return execute_voice_book(
+            db,
+            tenant,
+            tool_args,
+            background_tasks,
+            tool_name="flat_tool_with_context",
+            call_id=str((pseudo_message.get("call") or {}).get("id") or "flat-ctx"),
+            default_caller_phone=caller,
+        )
+
+    return execute_voice_check_availability(
+        db,
+        tenant,
+        tool_args,
+        tool_name="flat_check_with_context",
+        call_id=str((pseudo_message.get("call") or {}).get("id") or "flat-ctx"),
+    )
+
+
+def handle_manual_flat_request(
+    body: dict,
+    db: Session,
+    background_tasks: BackgroundTasks,
+    *,
+    force_book: bool,
+) -> dict:
+    """
+    Flat JSON (curl tests or VAPI per-tool URL posting only tool arguments).
+    Uses full-body tenant extraction — not only body['to_number'].
+    """
+    _body, message = normalize_vapi_body(body)
+    resolution = resolve_tenant_from_vapi_payload(
+        db, body, message, body, log_prefix="VAPI_FLAT"
+    )
+    tenant = resolution.tenant
+    if not tenant:
+        err = _tenant_resolution_error(resolution, "flat")
+        print("[VOICE BOOKING FAILED]", f"reason={err}")
+        if force_book:
+            return {"status": "failed", "message": err}
+        return {"available": False, "message": err}
+
+    is_book = force_book or bool(body.get("name") or body.get("customer_name"))
+    print(
+        "[VAPI ROUTE]",
+        f"protocol=manual-flat-{'book' if is_book else 'check'}",
+        f"resolution={resolution.resolution_method!r}",
+        tenant.log_fields(),
+    )
+
+    if is_book:
+        caller = extract_caller_from_candidates(body, message, body)
+        return execute_voice_book(
+            db,
+            tenant,
+            body,
+            background_tasks,
+            tool_name="manual_flat_book",
+            call_id="flat",
+            default_caller_phone=caller,
+        )
+
+    return execute_voice_check_availability(
         db,
         tenant,
         body,
-        background_tasks,
-        tool_name="legacy_flat_book",
-        call_id="legacy",
-        default_caller_phone=str(body.get("phone") or ""),
+        tool_name="manual_flat_check",
+        call_id="flat",
     )
 
 
@@ -371,24 +370,23 @@ def dispatch_vapi_request(
     db: Session,
     background_tasks: BackgroundTasks,
 ) -> dict:
-    """
-    Single entry for VAPI server URL and legacy tool URLs.
-    """
     log_vapi_incoming(body)
 
-    if is_vapi_tool_calls_payload(body):
-        print("[VAPI ROUTE]", "protocol=tool-calls (VAPI server URL)")
+    if is_vapi_tool_calls_envelope(body):
+        print("[VAPI ROUTE]", "protocol=tool-calls (VAPI server URL envelope)")
         return handle_vapi_tool_calls(body, db, background_tasks)
 
-    if is_legacy_flat_booking_payload(body):
-        if body.get("name") or body.get("customer_name"):
-            print("[VAPI ROUTE]", "protocol=legacy-flat-book")
-            return handle_legacy_flat_book(body, db, background_tasks)
-        print("[VAPI ROUTE]", "protocol=legacy-flat-check")
-        return handle_legacy_flat_check(body, db)
+    if is_flat_tool_args_with_call_context(body):
+        return handle_flat_tool_with_call_context(body, db, background_tasks)
 
-    msg = body.get("message") if isinstance(body.get("message"), dict) else {}
-    msg_type = msg.get("type", "unknown")
+    if is_manual_flat_test_payload(body):
+        force_book = bool(body.get("name") or body.get("customer_name"))
+        return handle_manual_flat_request(
+            body, db, background_tasks, force_book=force_book
+        )
+
+    _body, message = normalize_vapi_body(body)
+    msg_type = message.get("type", "unknown") if message else "unknown"
     print(
         "[VAPI WEBHOOK ACK]",
         f"message_type={msg_type!r}",
