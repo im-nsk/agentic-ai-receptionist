@@ -104,9 +104,10 @@ def build_assistant_request_response(tenant: TenantContext) -> Dict[str, Any]:
         f"prompt_len={len(tenant.business_prompt or '')}",
         f"has_services={bool(_services_summary(tenant.services))}",
     )
+    base_id_log = base_assistant_id if base_assistant_id else "(inline assistant)"
     print(
         "[VAPI ASSISTANT OVERRIDE]",
-        f"base_assistant_id={base_assistant_id!r or '(inline assistant)'}",
+        f"base_assistant_id={base_id_log!r}",
         f"first_message={first_message[:120]!r}",
         f"system_prompt_preview={system_prompt[:400]!r}...",
     )
