@@ -3,7 +3,8 @@
 ## What was wrong
 
 1. **Static VAPI assistant** — Dashboard prompt said "clinic receptionist" for every caller. `clients.free_text` (`business_prompt`) was never injected at call time.
-2. **No `assistant-request` handler** — Backend only handled `tool-calls`. VAPI used the fixed dashboard assistant for the whole call.
+2. **`assistant-request` never fired** — If the VAPI **phone number** still has a fixed `assistantId`, VAPI uses the published assistant for the whole call and only POSTs `tool-calls` to your server. Tenant resolution on tool-calls does **not** change the voice prompt.
+3. **Partial overrides** — `assistantId` + `assistantOverrides.model.messages` alone can merge with the published assistant; the dashboard system line may still win. Default is now **inline full `assistant`** (`VAPI_USE_INLINE_ASSISTANT=true`).
 3. **Availability UX** — Tool returned `available: false` without `alternative_slots` or `voice_instruction`, so the LLM treated it as a system failure.
 4. **Tool HTTP method** — Tools configured as GET while backend expects POST JSON (`tool-calls` envelope).
 5. **`to_number` in tool args** — Optional; tenant is resolved server-side from the call payload (Twilio/VAPI phone metadata).
@@ -25,13 +26,22 @@ Inbound call → Twilio → VAPI
 
 ## VAPI dashboard setup (one shared base assistant)
 
-1. Create **one** generic assistant in VAPI (minimal system text — no "clinic").
-2. Set Render env: `VAPI_BASE_ASSISTANT_ID=<that assistant uuid>`.
-3. On the **phone number**:
-   - `assistantId`: **null** (important)
+1. Create **one** generic assistant in VAPI (minimal system text — no "clinic"; optional `{{business_name}}` placeholders).
+2. Set Render env: `VAPI_USE_INLINE_ASSISTANT=true` (default), `VAPI_VOICE_ID`, `VAPI_MODEL_*`.
+3. On the **phone number** (critical):
+   - `assistantId`: **null** / unset — forces `assistant-request` to your server before each call
    - `server.url`: `https://<api>/vapi/webhook`
    - Custom header: `x-api-key` = `VAPI_API_KEY`
 4. Attach tools from `GET /vapi/tools/schema` — **POST** to the same server URL (not GET per tool URL).
+
+### Verify in Render logs (per call)
+
+| Log | Meaning |
+|-----|---------|
+| `[VAPI ASSISTANT REQUEST RECEIVED]` | Dynamic pipeline ran — good |
+| `[VAPI SYSTEM PROMPT PREVIEW]` | Contains Wrixio + business_prompt |
+| `[VAPI ASSISTANT RESPONSE OUT]` | JSON sent back to VAPI |
+| Only `[VAPI ROUTE] protocol=tool-calls` | **Broken** — phone still bound to static assistant |
 
 ## Per-tenant data (DB)
 
