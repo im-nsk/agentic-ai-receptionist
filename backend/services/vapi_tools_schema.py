@@ -108,6 +108,13 @@ def vapi_setup_instructions() -> Dict[str, Any]:
         "server_url": f"{public_api_base_url()}/vapi/webhook",
         "server_url_method": "POST",
         "server_url_header": "x-api-key: <VAPI_API_KEY from Render>",
+        "tool_response_format": {
+            "http_body": {"results": [{"toolCallId": "<id>", "result": "<single-line English string>"}]},
+            "note": (
+                "VAPI only passes results[].result (a string) to the LLM. "
+                "voice_instruction is NOT a special VAPI field — backend puts conversational text in result."
+            ),
+        },
         "phone_number_config": {
             "assistantId": None,
             "squadId": None,

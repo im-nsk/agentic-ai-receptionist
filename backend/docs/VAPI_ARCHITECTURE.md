@@ -50,7 +50,26 @@ Inbound call → Twilio → VAPI
 - Same `VAPI_BASE_ASSISTANT_ID` for all calls; **per-call** overrides via `assistant-request`.
 - No need to clone VAPI assistants per business.
 
-## Logs
+## Tool response format (critical)
+
+VAPI server URL **only** uses this HTTP 200 body:
+
+```json
+{ "results": [{ "toolCallId": "<id>", "result": "<single-line string>" }] }
+```
+
+- **`result`** must be a **string** (not a JSON object). The LLM reads this text directly.
+- **`voice_instruction`**, **`assistant_should_say`**, etc. are **not** VAPI magic fields — they only work if converted into the `result` string.
+- Use **`result`**, not `content`, `toolResult`, or `output` (those are not the server URL contract).
+- **`error`** key is optional for true failures; scheduling rejections should still use **`result`** with conversational text so the assistant does not say "technical error".
+
+Backend now sets `result` to natural language, e.g.:
+
+`SCHEDULING (not a system error): I'm sorry, Wrixio aren't open on Sundays. Would Monday 2026-05-25 at 9:00 AM work?`
+
+## to_number in tool args
+
+The LLM often sends `to_number=""` or `to_number="Restricted"` (Twilio privacy). **Ignore it.** Tenant is resolved from `message.phoneNumber` / call metadata on the server URL request, not from tool arguments.
 
 | Tag | When |
 |-----|------|

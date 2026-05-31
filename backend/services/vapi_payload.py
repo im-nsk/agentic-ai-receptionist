@@ -318,6 +318,8 @@ def extract_inbound_to_candidates(
 
     def add(source: str, raw: str) -> None:
         raw = (raw or "").strip()
+        if raw.lower() in ("restricted", "unknown", "anonymous"):
+            return
         if not raw or not _looks_like_phone(raw):
             return
         key = f"{source}:{raw}"
@@ -339,7 +341,13 @@ def extract_inbound_to_candidates(
 
     for key in ("to_number", "toNumber", "business_phone", "twilio_number", "To", "to"):
         if key in tool_args:
-            add(f"tool_args.{key}", _coerce_phone_value(tool_args[key]))
+            val = _coerce_phone_value(tool_args[key])
+            if str(tool_args.get(key) or "").strip().lower() in ("restricted", ""):
+                print(
+                    "[VAPI TOOL ARGS]",
+                    f"{key}={tool_args.get(key)!r} ignored for tenant lookup",
+                )
+            add(f"tool_args.{key}", val)
 
     for path, phone in _walk_phone_candidates(body):
         if "customer" in path.lower():

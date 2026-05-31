@@ -20,7 +20,8 @@ Rules:
 - If availability_check_failed is true, you may still suggest alternatives but mention you are checking the schedule.
 - Collect the caller's name, phone number, preferred date, and time before booking.
 - When calling tools, use date as YYYY-MM-DD when possible (example: 2026-05-25) and time like 2:30 PM.
-- The server resolves which business to use from the phone call; you do not need to pass to_number in tools unless the tool schema requires it.
+- Do NOT pass to_number in tools — the server identifies the business from the phone call automatically. Ignore empty or "Restricted" to_number values.
+- Tool results are plain English sentences. Read them aloud naturally. If the result says SCHEDULING (not a system error), never apologize for a technical problem.
 """
 
 _BOOKING_WORKFLOW = """
