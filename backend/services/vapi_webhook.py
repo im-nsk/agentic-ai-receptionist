@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from backend.services.vapi_assistant import (
     build_assistant_request_fallback,
-    build_assistant_request_response,
+    build_dynamic_assistant,
+    is_assistant_request_message_type,
 )
 from backend.services.vapi_payload import (
     extract_caller_from_candidates,
@@ -58,23 +59,44 @@ def _normalize_tool_name(name: str) -> str:
 
 def is_assistant_request(body: dict) -> bool:
     _, message = normalize_vapi_body(body)
-    return message.get("type") == "assistant-request"
+    msg_type = str(message.get("type") or "")
+    if is_assistant_request_message_type(msg_type):
+        return True
+    # Some payloads nest type at root when message is minimal
+    root_type = str(body.get("type") or "") if isinstance(body, dict) else ""
+    return is_assistant_request_message_type(root_type)
 
 
 def handle_assistant_request(body: dict, db: Session) -> dict:
     """
-    VAPI calls server URL before the call starts (phone number has no fixed assistantId).
+    VAPI calls server URL before the call starts when the phone number has no fixed assistantId.
     Return dynamic assistant config for the resolved tenant.
     """
     _body, message = normalize_vapi_body(body)
+    call = message.get("call") if isinstance(message.get("call"), dict) else {}
+    call_id = str(call.get("id") or "")
+
+    print(
+        "[VAPI ASSISTANT REQUEST RECEIVED]",
+        f"call_id={call_id!r}",
+        f"message_type={message.get('type')!r}",
+    )
     print("[VAPI ROUTE]", "protocol=assistant-request (dynamic tenant assistant)")
 
     resolution = resolve_tenant_from_vapi_payload(db, body, message, {}, log_prefix="VAPI_ASSISTANT")
     if not resolution.tenant:
-        return build_assistant_request_fallback(
-            reason="tenant_not_resolved",
+        print(
+            "[VAPI DIAGNOSTIC]",
+            "assistant-request tenant NOT resolved — fallback assistant returned",
         )
-    return build_assistant_request_response(resolution.tenant)
+        return build_assistant_request_fallback(reason="tenant_not_resolved")
+
+    print(
+        "[VAPI DIAGNOSTIC]",
+        "executing build_dynamic_assistant()",
+        resolution.tenant.log_fields(),
+    )
+    return build_dynamic_assistant(resolution.tenant)
 
 
 def log_vapi_incoming(body: dict) -> None:
@@ -448,7 +470,17 @@ def dispatch_vapi_request(
         return handle_assistant_request(body, db)
 
     if is_vapi_tool_calls_envelope(body):
-        print("[VAPI ROUTE]", "protocol=tool-calls (VAPI server URL envelope)")
+        print(
+            "[VAPI ROUTE]",
+            "protocol=tool-calls (VAPI server URL envelope)",
+        )
+        print(
+            "[VAPI DIAGNOSTIC]",
+            "If callers hear a static 'clinic' prompt, confirm logs also show "
+            "[VAPI ASSISTANT REQUEST RECEIVED] at call start. "
+            "If NEVER present: in VAPI dashboard set phone number assistantId=null "
+            "and server.url=/vapi/webhook so assistant-request runs before tool-calls.",
+        )
         return handle_vapi_tool_calls(body, db, background_tasks)
 
     if is_flat_tool_args_with_call_context(body):
