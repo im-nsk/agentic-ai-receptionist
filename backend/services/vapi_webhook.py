@@ -22,6 +22,7 @@ from backend.services.vapi_payload import (
     resolve_tenant_from_vapi_payload,
     split_root_flat_tool_body,
 )
+from backend.services.vapi_tool_response import format_vapi_tool_result
 from backend.services.voice_booking import (
     execute_voice_book,
     execute_voice_check_availability,
@@ -186,6 +187,15 @@ def _tenant_resolution_error(resolution: Any, tool_name: str) -> str:
     )
 
 
+def _log_tool_args_to_number(args: dict) -> None:
+    raw = args.get("to_number") or args.get("toNumber") or ""
+    if raw in ("", "Restricted", "restricted"):
+        print(
+            "[VAPI TOOL ARGS]",
+            f"to_number={raw!r} (ignored — tenant resolved from call metadata, not tool args)",
+        )
+
+
 def _run_tool(
     db: Session,
     tenant: Any,
@@ -197,6 +207,7 @@ def _run_tool(
     tool_id = str(tool_call.get("id") or "")
     tool_name = str(tool_call.get("name") or "")
     args = _tool_args(tool_call)
+    _log_tool_args_to_number(args)
     intent = _detect_intent(tool_name)
     call = message.get("call") if isinstance(message.get("call"), dict) else {}
     call_id = str(call.get("id") or "")
@@ -222,7 +233,7 @@ def _run_tool(
             tool_name=tool_name,
             call_id=call_id,
         )
-        return tool_id, json.dumps(result, default=str)
+        return tool_id, format_vapi_tool_result(result, tool=intent)
 
     if intent == "book_appointment":
         caller = extract_caller_from_candidates(body, message, args)
@@ -235,11 +246,18 @@ def _run_tool(
             call_id=call_id,
             default_caller_phone=caller,
         )
-        return tool_id, json.dumps(result, default=str)
+        return tool_id, format_vapi_tool_result(result, tool=intent)
 
     err = f"Unknown tool: {tool_name}"
     print("[VAPI TOOL SKIP]", err)
-    return tool_id, json.dumps({"error": err})
+    return tool_id, format_vapi_tool_result(
+        {
+            "not_a_system_error": False,
+            "assistant_should_say": "I need a moment — let me try that again.",
+            "message": err,
+        },
+        tool=intent,
+    )
 
 
 def handle_vapi_tool_calls(
@@ -265,7 +283,21 @@ def handle_vapi_tool_calls(
         if not tenant:
             err = _tenant_resolution_error(resolution, tool_name)
             print("[VOICE BOOKING FAILED]", f"reason={err}", f"tool={tool_name!r}")
-            results.append({"toolCallId": tool_id, "error": err})
+            results.append(
+                {
+                    "toolCallId": tool_id,
+                    "result": format_vapi_tool_result(
+                        {
+                            "assistant_should_say": (
+                                "I'm having trouble loading this business line. "
+                                "Please call back shortly."
+                            ),
+                            "message": err,
+                        },
+                        tool=tool_name,
+                    ),
+                }
+            )
             continue
 
         try:
@@ -283,7 +315,21 @@ def handle_vapi_tool_calls(
         except Exception as exc:
             err = f"Tool execution failed: {exc!r}"
             print("[VOICE BOOKING FAILED]", f"tool={tool_name!r}", f"reason={err!r}")
-            results.append({"toolCallId": tool_id, "error": err})
+            results.append(
+                {
+                    "toolCallId": tool_id,
+                    "result": format_vapi_tool_result(
+                        {
+                            "assistant_should_say": (
+                                "Something went wrong on my end. "
+                                "Would you like to try a different time?"
+                            ),
+                            "message": err,
+                        },
+                        tool=tool_name,
+                    ),
+                }
+            )
 
     if not results:
         print("[VAPI WEBHOOK]", "tool-calls message had no toolCallList entries")

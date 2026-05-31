@@ -15,6 +15,7 @@ from backend.services.tenant_resolver import TenantContext
 from backend.services.vapi_tool_response import (
     enrich_voice_availability_response,
     enrich_voice_book_response,
+    format_vapi_tool_result,
 )
 from backend.services.voice_datetime import VoiceDatetimeParseError, prepare_voice_booking_fields
 
@@ -154,6 +155,10 @@ def execute_voice_check_availability(
         )
         return {
             "available": False,
+            "not_a_system_error": True,
+            "assistant_should_say": (
+                "I had trouble checking that time. Could you tell me another day and time?"
+            ),
             "message": "Availability check failed",
             "error": str(exc),
         }
@@ -240,7 +245,12 @@ def execute_voice_book(
             working_hours=tenant.working_hours,
             business_name=tenant.business_name,
         )
-        result = enrich_voice_book_response(result, tenant)
+        result = enrich_voice_book_response(
+            result,
+            tenant,
+            date_iso=date,
+            time_label=time,
+        )
         if result.get("status") == "confirmed":
             _log_voice_booking_success(tenant, result=result, call_id=call_id)
         else:
@@ -257,7 +267,13 @@ def execute_voice_book(
             call_id=call_id,
             exc=exc,
         )
-        return {"status": "failed", "message": str(exc.detail)}
+        fail = enrich_voice_book_response(
+            {"status": "failed", "message": str(exc.detail)},
+            tenant,
+            date_iso=date,
+            time_label=time,
+        )
+        return fail
     except Exception as exc:
         _log_voice_booking_failed(
             tenant,
