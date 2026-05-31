@@ -35,8 +35,21 @@ def normalize_phone(phone, default_region="US"):
         return None
 
 
+def is_sms_enabled() -> bool:
+    """SMS off unless ENABLE_SMS is true/1/yes/on (Render env). Default: disabled."""
+    return os.getenv("ENABLE_SMS", "false").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+
+
 # ---------- SMS SENDER ----------
 def send_sms(phone, message, retries=2):
+    if not is_sms_enabled():
+        print("[SMS DISABLED]", f"to={phone!r}")
+        return False
 
     if not client or not TWILIO_PHONE:
         print("⚠️ SMS skipped (Twilio not configured)")

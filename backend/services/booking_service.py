@@ -15,7 +15,7 @@ from backend.services.calendar_service import (
     tenant_schedule_allows,
 )
 from backend.services.phone_validation import normalize_and_validate_phone
-from backend.services.sms_service import send_sms
+from backend.services.sms_service import is_sms_enabled, send_sms
 
 
 def check_availability_logic(
@@ -218,10 +218,13 @@ def book_appointment_logic(
     if not ok:
         return {"status": "failed", "message": "Could not create booking"}
 
-    background_tasks.add_task(
-        send_sms,
-        phone,
-        f"Hi {name}, your appointment is confirmed on {date} at {time}",
-    )
+    if is_sms_enabled():
+        background_tasks.add_task(
+            send_sms,
+            phone,
+            f"Hi {name}, your appointment is confirmed on {date} at {time}",
+        )
+    else:
+        print("[SMS DISABLED]", f"booking confirmed for {phone!r} (no confirmation SMS sent)")
 
     return {"status": "confirmed", "message": "Booking confirmed"}
